@@ -1,0 +1,199 @@
+#!/bin/bash
+
+#########################################################################
+#
+# run pb_calibration pipeline
+#
+# for usage run
+#
+#   pb_callibration -h
+#
+#########################################################################
+
+initialise ()
+{
+
+    # set defaults
+    bam=""
+    snp=""
+    runfolder_dir=""
+    intensity_dir=""
+    mode="1"
+    run=""
+    lane=""
+    read="1"
+    cstart=""
+    cstart1=""
+    cstart2=""
+    t_filter=""
+    nL="3"
+    nR="6"
+    prefix=""
+
+    TEMP=`getopt -a -o h --long bam:,snp:,runfolder_dir:,intensity_dir:,run:,lane:,read:,cstart:,cstart1:,cstart2:,t_filter:,nL:,nR:,prefix:,help -n $0 -- "$@"`
+
+    if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
+
+    eval set -- "$TEMP"
+
+    while true ; do
+        case "$1" in
+            --bam) bam=$2; echo "bam $bam" >&2; shift 2 ;;
+            --snp) snp=$2; echo "snp file $snp" >&2; shift 2 ;;
+            --intensity_dir) intensity_dir=$2; echo "intensity_dir $intensity_dir" >&2; shift 2 ;;
+            --runfolder_dir) runfolder_dir=$2; echo "runfolder_dir $runfolder_dir" >&2; shift 2 ;;
+            --run) run=$2; echo "run $run" >&2; shift 2 ;;
+            --prefix) prefix=$2; echo "prefix $prefix" >&2; shift 2 ;;
+            --lane) lane=$2; echo "lane $lane" >&2; shift 2 ;;
+            --read) read=$2; echo "read $read" >&2; shift 2 ;;
+            --cstart) cstart=$2; echo "cstart $cstart" >&2; shift 2 ;;
+            --cstart1) cstart1=$2; echo "cstart1 $cstart1" >&2; shift 2 ;;
+            --cstart2) cstart2=$2; echo "cstart2 $cstart2" >&2; shift 2 ;;
+            --t_filter) t_filter=$2; echo "will filter tiles with q < mean - $t_filter*stdev" >&2; shift 2 ;;
+            --nL) nL=$2; echo "$nL bins between 0.25 and optimal cut" >&2; shift 2 ;;
+            --nR) nR=$2; echo "$nR bins between optimal cut and qmax" >&2; shift 2 ;;
+            -h|--help) echo "Usage: $0 [options]";
+                       echo "                   ";
+                       echo "       -bam <bam file>";
+                       echo "       -snp <snp file>";
+                       echo "                   ";
+                       echo "       -intensity_dir      intensity directory";
+                       echo "                   ";
+                       echo "       -runfolder_dir      runfolder directory";
+                       echo "       -run <run>          run";
+                       echo "       -lane <lane>        lane";
+                       echo "       -read <read>        read";
+                       echo "                             default 1";
+                       echo "       -cstart <cstart>    cycle number of first base";
+                       echo "                   ";
+                       echo "            or     ";
+                       echo "                   ";
+                       echo "       -cstart1 <cstart1>  cycle number of first base of read1";
+                       echo "       -cstart2 <cstart2>  cycle number of first base of read2";
+                       echo "                             default 1";
+                       echo "       -t_filter <count>   filter tiles with q < mean - count * stdev";
+                       echo "                             default do not filter tiles";
+                       echo "       -nL <count>         number of bins in calibration table";
+                       echo "                             between optimal cut and 0.25";
+                       echo "                             default 3";
+                       echo "       -nR <count>         number of bins in calibration table";
+                       echo "                             between optimal cut and qmax";
+                       echo "                             default 6";
+                       echo "       -prefix <prefix>";
+                       echo "                             default \$run_\$lane_\$read_train";
+                       echo "                   ";
+                       echo "       -h|--help   ";
+                       echo "                   ";
+                       exit 0 ;;
+            --) shift ; break ;;
+            *) echo "Unrecognised option $1" >&2; exit 1 ;;
+        esac
+    done
+
+    if [ -z $bam ] ; then
+        echo "You must supply a bam file" >&2
+        exit 1
+    fi
+
+    if [ -z $intensity_dir ] ; then
+        if [ -z $runfolder_dir ] && [ -z $run ] ; then
+            echo "If you do not specify intensity_dir you must specify runfolder_dir or run" >&2
+            exit 1
+        fi
+    fi
+
+    if [ -z $prefix ] ; then
+        if [ -z $run ] || [ -z $lane ] || [ -z $read ] ; then
+            echo "If you do not specify a prefix you must specify lane, run and read" >&2
+            exit 1
+        fi
+    fi
+}
+
+set -o errexit
+set -o nounset
+
+tools=`dirname $0`
+tools=`readlink -f $tools`
+
+initialise "$@"
+
+if [ -z $intensity_dir ] ; then
+    if [ -z $runfolder_dir ] ; then
+        # use NPG to lookup the runfolder given the run
+        runfolder_dir=`perl -le 'use srpipe::runfolder; print srpipe::runfolder->new(id_run=>$ARGV[0])->runfolder_path' $run`
+        if [ -z $runfolder_dir ] ; then
+            echo "No runfolder for run $run" >&2
+            exit 1
+        fi
+    fi
+    if [ ! -d $runfolder_dir ] ; then
+        echo "Runfolder directory $runfolder_dir does not exist" >&2
+        exit 1
+    fi
+    echo "runfolder directory $runfolder_dir" >&2
+
+    intensity_dir=$runfolder_dir/Data/Intensities
+fi
+if [ ! -d $intensity_dir ] ; then
+    echo "Intensity directory $intensity_dir does not exist" >&2
+    exit 1
+fi
+echo "intensity directory $intensity_dir" >&2
+
+if [ ! -s $bam ] ; then
+    echo "bam file $bam does not exist" >&2
+    exit 1
+fi
+
+if [ -z $prefix ] ; then
+    prefix=${run}_${lane}_${read}_train
+fi
+echo "Output file prefix ${prefix}" >&2
+
+echo "Checking bam file" >&2
+
+stat_file=${bam/%.bam/_flagstat.txt}
+if [ ! -s $stat_file ] ; then
+  stat_file=${prefix}_flagstat.txt
+  samtools flagstat $bam > $stat_file
+  if [ ! -s $stat_file ] ; then
+      echo "failed to create flagstat file" >&2
+      exit 1
+  fi
+fi
+
+pair=`awk '/[0-9]+ paired in sequencing/ {print $1}' $stat_file`
+if [ $pair -gt 0 ] ; then
+    count=`awk '/[0-9]+ with itself and mate mapped/ {print $1}' $stat_file`
+    if [ $count -lt 200000 ] ; then
+        echo "Only $count paired reads align < 200000" >&2
+        exit 0
+    fi
+else
+    count=`awk '/[0-9]+ mapped/ {print $1}' $stat_file`
+    if [ $count -lt 100000 ] ; then
+        echo "Only $count reads align < 100000" >&2
+        exit 0
+    fi
+fi
+
+echo "Making calibration table" >&2
+
+parms=""
+if [ $t_filter ] ; then
+    parms="$parms -filter-bad-tiles $t_filter"
+fi
+if [ $snp ] ; then
+    parms="$parms -snp_file $snp"
+fi
+if [ $ct ] ; then
+    parms="$parms -ct $ct -cstart $cstart"
+else
+    parms="$parms -ct $ct -cstart1 $cstart1 -cstart2 $cstart2"
+fi
+$tools/calibration_pu $parms -intensity-dir $intensity_dir -read $read -ct $ct -nL $nL -nR $nR -p $prefix -s $bam
+
+echo "Checking calibration table" >&2
+
+$tools/check_caltable.pl -mode $mode -prefix $prefix -verbose -norename
