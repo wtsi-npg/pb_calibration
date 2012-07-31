@@ -1,0 +1,70 @@
+Installation
+============
+
+To install this software, you first need to get and install the Staden
+io_lib package (version 1.12.1 or newer).  This can be obtained from
+http://sourceforge.net/projects/staden/files/ or alternatively you may
+be able to download it as a pre-built package for your OS distribution.
+
+You also need 'zlib'.  In the unlikely event that you don't have this already
+it is available from http://www.zlib.net/.
+
+Note that if you install packaged versions of io_lib and zlib, you will need
+the development versions in order to get the include files etc. needed to
+build software that uses them.
+
+When you have installed io_lib, you can build this package using:
+
+./configure
+make
+make check                  # Optional
+make install
+
+
+The configure script takes a few options.  The most useful are:
+
+ --prefix=PREFIX      Install somewhere other than the
+                      default location (/usr/local).
+ --with-io_lib=DIR    Look for io_lib in DIR.
+ --with-zlib=DIR      Look for zlib in DIR.
+
+The --with- options are needed if you have installed io_lib or zlib in
+non-standard locations and the configure script can't find them by itself.
+
+Run './configure --help' to see a list of other options available.
+
+Make check requires perl, along with the File::Temp and Getopt::Long modules.
+It makes artificial Illumina analysis software directories in /tmp,
+converts them to SRF and then checks the resulting files.  You will need
+0.5GB of free space in /tmp to run the tests.
+
+Subdirectory Builds
+============ ======
+
+You can also build in a subdirectory, which is useful if you want to build
+for different architectures or with different options.  It also helps
+to keep the source directories tidy.  To do a subdirectory build, use:
+
+mkdir build
+cd build
+../configure
+make
+make check               # Optional
+make install
+
+Missing configure script
+======= ========= ======
+
+If you do not have a configure script (e.g. because you checked out the
+Subversion repository instead of downloading a release tarball), you will need
+to build one.  This requires GNU autoconf and automake, which can be obtained
+either from your OS distribution or from http://www.gnu.org/software/autoconf/
+and http://www.gnu.org/software/automake/.
+
+With autoconf and automake installed, you should be able to run:
+
+./bootstrap
+
+in the main package directory to create a new configure script.  Then follow
+the instructions above.
+
