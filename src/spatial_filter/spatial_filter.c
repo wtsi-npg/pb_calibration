@@ -1713,11 +1713,11 @@ int main(int argc, char **argv)
 	static struct option long_options[] = {
                    {"intensity_dir", 1, 0, 'i'},
                    {"intensity-dir", 1, 0, 'i'},
-                   {"snp_file", 0, 0, 's'},
-                   {"snp-file", 0, 0, 's'},
+                   {"snp_file", 1, 0, 's'},
+                   {"snp-file", 1, 0, 's'},
                    {"tileviz", 0, 0, 't'},
                    {"help", 0, 0, 'h'},
-                   {"filter", 0, 0, 'F'},
+                   {"filter", 1, 0, 'F'},
                    {0, 0, 0, 0}
                };
 
