@@ -2,17 +2,16 @@
 #define RTS_H_INCLUDED
 
 typedef struct {
-    long align;		// FIXME do these really need to be 'long'? Can we make them 'int'?
-    long mismatch;
-    long insertion;
-    long deletion;
-    long soft_clip;
-    int known_snp;	// FIXME can we get rid of this?
-//    long no_call;
+        int align;
+        int mismatch;
+        int insertion;
+        int deletion;
+        int soft_clip;
+        int known_snp;
 	char state;
 } RegionTable;
 
-void initRTS(int n_tiles, int n_regions, int n_reads, int n_cycles);
+void initRTS(int n_tiles, int n_regions, int iread, int n_cycles);
 void freeRTS(void);
 RegionTable *getRTS(int itile, int iregion, int iread, int icycle);
 
