@@ -39,43 +39,6 @@
  */
 
 /*
- * Parts of this code have been edited by Illumina.  These edits have been
- * made available under the following license:
- *
- * Copyright (c) 2008-2009, Illumina Inc.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *
- *     * Redistributions in binary form must reproduce the above
- *       copyright notice, this list of conditions and the following
- *       disclaimer in the documentation and/or other materials
- *       provided with the distribution.
- *
- *     * Neither the name of the Illumina Inc. nor the
- *       names of its contributors may be used to endorse or promote
- *       products derived from this software without specific prior
- *       written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY ILLUMINA ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL ILLUMINA BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- */
-
-/*
  * Author: Steven Leonard, Jan 2009
  *
  * This code looks for spatial features given an aligned bam file
@@ -143,6 +106,7 @@ const char *pbs_c_rev = "$Revision$";
 #define N_TILES 120
 #define N_READS 3
 #define N_CYCLES 250
+#define N_COMMENTS 100
 
 #define BASE_ALIGN      (1<<0)
 #define BASE_MISMATCH   (1<<1)
@@ -153,11 +117,11 @@ const char *pbs_c_rev = "$Revision$";
 
 #define PHRED_QUAL_OFFSET 33	// phred quality values offset
 
-#define COORD_SHIFT   1000.0
-#define COORD_FACTOR  10.0
+#define COORD_SHIFT   1000
+#define COORD_FACTOR  10
 
 #define REGION_MAGIC                "RGFL"
-#define REGION_SIZE                 200.0
+#define REGION_SIZE                 200
 #define REGION_MIN_COUNT            10
 #define REGION_MISMATCH_THRESHOLD   50.0
 #define REGION_INSERTION_THRESHOLD  20.0
@@ -173,6 +137,19 @@ const char *pbs_c_rev = "$Revision$";
 #define TILE_REGION_THRESHOLD  90.0
 
 #define REGION_STATE_MASK  (REGION_STATE_INSERTION | REGION_STATE_DELETION)	// treat reads with ANY indels as a QCFAIL
+
+typedef struct {
+	char *region_magic;
+	int coord_shift;
+	int coord_factor;
+	int region_size; 
+	int nregions;
+	int nreads;
+	int readLength[N_READS];
+	char *cmdLine;
+	int ncomments;
+	char *comments[N_COMMENTS];
+} Header;
 
 typedef struct {
 	char *cmdline;
@@ -199,6 +176,69 @@ typedef struct {
 
 static char *complement_table = NULL;
 static int tileArray[N_TILES];
+
+/*
+ * Header functions
+ *
+ * These should probably go into a seperate module. Or class.
+ *
+ */
+
+void writeHeader(FILE *fp, Header *hdr)
+{
+	int i;
+	fprintf(fp, "%s\n", hdr->region_magic);
+	fprintf(fp, "%d\n", hdr->coord_shift);
+	fprintf(fp, "%d\n", hdr->coord_factor);
+	fprintf(fp, "%d\n", hdr->region_size);
+	fprintf(fp, "%d\n", hdr->nregions);
+	fprintf(fp, "%d\n", hdr->nreads);
+	for (i=0; i<hdr->nreads; i++)
+		fprintf(fp, "%d\n", hdr->readLength[i]);
+	fprintf(fp, "%s\n", hdr->cmdLine);
+	fprintf(fp, "%d\n", hdr->ncomments);
+	for (i=0; i<hdr->ncomments; i++) 
+		fprintf(fp, "%s\n", hdr->comments[i]);
+}
+
+void addHeaderComment(Header *hdr, char *comment)
+{
+	hdr->comments[hdr->ncomments++] = strdup(comment);
+}
+
+void chomp(char *line)
+{
+	int n = strlen(line) - 1;
+	if (line[n] == '\n') line[n] = 0;
+	return;
+}
+
+void readHeader(FILE *fp, Header *hdr)
+{
+	int len = 1024;
+	char line[1024];
+	int i;
+
+	fgets(line, len, fp); chomp(line); hdr->region_magic = strdup(line);
+	fgets(line, len, fp); hdr->coord_shift = atoi(line);
+	fgets(line, len, fp); hdr->coord_factor = atoi(line);
+	fgets(line, len, fp); hdr->region_size = atoi(line);
+	fgets(line, len, fp); hdr->nregions = atoi(line);
+	fgets(line, len, fp); hdr->nreads = atoi(line);
+	for (i=0; i < hdr->nreads; i++) {
+		fgets(line, len, fp); hdr->readLength[i] = atoi(line);
+	}
+	fgets(line, len, fp); chomp(line); hdr->cmdLine = strdup(line);
+	fgets(line, len, fp); hdr->ncomments = atoi(line);
+	for (i=0; i < hdr->ncomments; i++) {
+		fgets(line, len, fp); chomp(line); hdr->comments[i] = strdup(line);
+	}
+}
+
+
+/*
+ * end of Header functions
+ */
 
 static void checked_chdir(const char *dir)
 {
@@ -459,9 +499,9 @@ static void findBadRegions(Settings *s, int ntiles)
 					// insertion - mark bins with maximum insertion rate > threshold
 					if ((100.0 * rt->insertion / n) >= REGION_INSERTION_THRESHOLD) rt->state |= REGION_STATE_INSERTION;
 					// deletion - mark bins with maximum deletion rate > threshold
-                                        if ((100.0 * rt->deletion / n)  >= REGION_DELETION_THRESHOLD)  rt->state |= REGION_STATE_DELETION;
+					if ((100.0 * rt->deletion / n)  >= REGION_DELETION_THRESHOLD)  rt->state |= REGION_STATE_DELETION;
 					// soft_clip - mark bins with maximum soft_clip rate > threshold
-                                        if ((100.0 * rt->soft_clip / n) >= REGION_SOFT_CLIP_THRESHOLD) rt->state |= REGION_STATE_SOFT_CLIP;
+					if ((100.0 * rt->soft_clip / n) >= REGION_SOFT_CLIP_THRESHOLD) rt->state |= REGION_STATE_SOFT_CLIP;
 
 					//if (rt->state) display("%d:%d:%d:%d:%d:%d\t%02x\n", s->lane, tileArray[itile], iregion, read, cycle, n, rt->state);
 				}
@@ -475,20 +515,23 @@ static void findBadRegions(Settings *s, int ntiles)
 void printFilter(Settings *s, int ntiles, FILE *fp) 
 {
 	int itile;
+	Header hdr;
+	int read;
 
 #ifdef BINARY_FILTER_FILE
-        char region_magic[] = REGION_MAGIC;
-        float coord_shift = COORD_SHIFT, coord_factor = COORD_FACTOR;
-        int region_size = REGION_SIZE, nreads = N_READS, nregions = s->nregions, read;
-        fwrite(region_magic, 4, 1, fp);
-        fwrite(&coord_shift, 4, 1, fp);
-        fwrite(&coord_factor, 4, 1, fp);
-        fwrite(&region_size, 4, 1, fp);
-        fwrite(&ntiles, 4, 1, fp);
-        fwrite(&nregions, 4, 1, fp);
-        fwrite(&nreads, 4, 1, fp);
-        for (read=0; read<nreads; read++)
-            fwrite(&s->read_length[read], 4, 1, fp);
+	hdr.region_magic = strdup(REGION_MAGIC);
+	hdr.coord_shift = COORD_SHIFT; 
+	hdr.coord_factor = COORD_FACTOR;
+	hdr.region_size = REGION_SIZE;
+	hdr.nreads = N_READS;
+	hdr.nregions = s->nregions;
+	for (read=0; read < hdr.nreads; read++)
+		hdr.readLength[read] = s->read_length[read];
+	hdr.cmdLine = strdup(s->cmdline);
+	hdr.ncomments = 0;
+	addHeaderComment(&hdr, "Hello world");
+	addHeaderComment(&hdr, "@PG: This is a proper comment");
+	writeHeader(fp,&hdr);
 #endif
         
 	for (itile = 0; itile < ntiles; itile++) {
@@ -1259,8 +1302,8 @@ static void bam_header_add_pg(Settings *s, bam_header_t *bam_header)
 static int updateRegionTable(Settings *s, int itile, int read, int x, int y, int *read_mismatch)
 {
 
-	float x_coord = (x - COORD_SHIFT) / COORD_FACTOR;
-	float y_coord = (y - COORD_SHIFT) / COORD_FACTOR;
+	float x_coord = (float)(x - COORD_SHIFT) / (float)COORD_FACTOR;
+	float y_coord = (float)(y - COORD_SHIFT) / (float)COORD_FACTOR;
 	int iregion =
 	    (int)(x_coord / REGION_SIZE) * s->nregions_y +
 	    (int)(y_coord / REGION_SIZE);
@@ -1535,6 +1578,7 @@ static void usage(int code)
 		"" "  calculate or apply a spatial filter\n" "");
 	fprintf(usagefp, "  command must be one of:\n");
 	fprintf(usagefp, "    -d         just dump bam file in 'mismatch' format\n");
+	fprintf(usagefp, "    -D         just dump filter file in ascii text format to stdout\n");
 	fprintf(usagefp, "    -c         calculate filter files\n");
 	fprintf(usagefp, "    -a         apply filter files\n");
 	fprintf(usagefp, "\n");
@@ -1708,11 +1752,39 @@ int dumpBAM(Settings *s)
 		return EXIT_SUCCESS;
 }
 
+int dumpFilterFile(char *filename)
+{
+	FILE *fp;
+	Header hdr;
+	int i;
+
+	if (!filename) die("dumpFilterFile: no filter filename given\n");
+	fp = fopen(filename, "r");
+	if (!fp) die("dumpFilterFile: Can't open file %s\n", filename);
+	readHeader(fp,&hdr);
+	printf("Magic:          %s\n", hdr.region_magic);
+	printf("Coord Shift:    %-5d\n", hdr.coord_shift);
+	printf("Coord Factor:   %-5d\n", hdr.coord_shift);
+	printf("Region Size:    %-5d\n", hdr.region_size);
+	printf("Num Regions:    %-5d\n", hdr.nregions);
+	printf("Read Length:    ");
+	for (i=0; i < hdr.nreads; i++) printf("%-5d ", hdr.readLength[i]);
+	printf("\n");
+	printf("Command Line:   %s\n", hdr.cmdLine);
+	for (i=0; i < hdr.ncomments; i++) {
+		if (i) printf("                %s\n", hdr.comments[i]);
+		else   printf("Comments:       %s\n", hdr.comments[i]);
+	}
+	fclose(fp);
+	return EXIT_SUCCESS;
+}
+
+
 int main(int argc, char **argv)
 {
-
 	Settings settings;
 	const char *override_intensity_dir = NULL;
+	int dumpFilter = 0;
 
 	settings.filter = "/dev/stdout";
 	settings.tileViz = 0;
@@ -1749,9 +1821,10 @@ int main(int argc, char **argv)
                };
 
 	char c;
-	while ( (c = getopt_long(argc, argv, "dcafuo:i:p:s:t:qh?", long_options, 0)) != -1) {
+	while ( (c = getopt_long(argc, argv, "dcafuDF:o:i:p:s:t:qh?", long_options, 0)) != -1) {
 		switch (c) {
 			case 'd':	settings.dump = 1; break;
+			case 'D':	dumpFilter = 1; break;
 			case 'c':	settings.calculate = 1;		break;
 			case 'a':	settings.apply = 1;			break;
 			case 't':	parse_next_int(optarg,&settings.tileViz,NULL);	break;
@@ -1772,7 +1845,7 @@ int main(int argc, char **argv)
 
 	if (optind < argc) settings.in_bam_file = argv[optind];
 
-	if (!settings.in_bam_file) die("No BAM file specified\n");
+	if (!settings.in_bam_file && !dumpFilter) die("No BAM file specified\n");
 
 	/* preserve starting directory */
 	settings.working_dir = getcwd(NULL,0);
@@ -1787,6 +1860,9 @@ int main(int argc, char **argv)
 			die("ERROR: reading snp file %s\n", settings.snp_file);
 		}
 	}
+
+	/* Dump the filter file */
+	if (dumpFilter) return dumpFilterFile(settings.filter);
 
 	/* dump the alignments */
 	if (settings.dump) return dumpBAM(&settings);
