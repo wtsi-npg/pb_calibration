@@ -17,7 +17,7 @@ static int n_cycles[N_READS] = {0, 0, 0};
 
 static inline int getIndex(int itile, int iregion, int iread, int icycle)
 {
-	return (itile * n_regions * n_cycles[iread]) + (iregion * n_cycles[iread]) + icycle;
+	return (itile * n_regions * n_cycles[iread]) + (icycle * n_regions) + iregion;
 }
 
 void initRTS(int tiles, int regions, int iread, int cycles) 
@@ -43,12 +43,12 @@ void freeRTS(void)
 
 RegionTable *getRTS(int itile, int iregion, int iread, int icycle)
 {
-	if (!rts) die("RTS has not been initialised\n");
-
 	if ((itile < 0) || (itile >= n_tiles)) die("Error in getRTS: itile is %d: must be in [0..%d]\n", itile, n_tiles-1);
 	if ((iregion < 0) || (iregion >= n_regions)) die("Error in getRTS: iregion is %d: must be in [0..%d]\n", iregion, n_regions-1);
 	if ((iread < 0) || (iread >= N_READS)) die("Error in getRTS: iread is %d: must be in [0..%d]\n", iread, N_READS-1);
 	if ((icycle < 0) || (icycle >= n_cycles[iread])) die("Error in getRTS: icycle is %d: must be in [0..%d]\n", icycle, n_cycles[iread]-1);
+
+	if (!rts[iread]) die("RTS has not been initialised for iread %d\n", iread);
 
 	int index = getIndex(itile,iregion,iread,icycle);
 	return rts[iread] + index;

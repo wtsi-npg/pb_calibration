@@ -134,7 +134,7 @@ const char *pbs_c_rev = "$Revision$";
 #define REGION_STATE_DELETION   (1<<4)
 #define REGION_STATE_SOFT_CLIP  (1<<5)
 
-#define TILE_REGION_THRESHOLD  90.0
+#define TILE_REGION_THRESHOLD  75.0
 
 #define REGION_STATE_MASK  (REGION_STATE_INSERTION | REGION_STATE_DELETION)	// treat reads with ANY indels as a QCFAIL
 
@@ -382,83 +382,73 @@ static uint8_t *load_filter(Settings *s, char *file, size_t *nclusters)
 //
 static void displayTileViz(Settings *s, int ntiles, int itile)
 {
-	die("The TileViz option is not yet implemented. Sorry\n");
-#if 0
 	int tile = tileArray[itile];
-	RegionTable *rt = rts[itile][0][0][0];	// FIXME
-	int read, read_length, irt, cycle, iregion;
+	int read = s->tileViz;
+	int *coverage  = smalloc(s->nregions * sizeof(int));
+	int *mismatch  = smalloc(s->nregions * sizeof(int));
+	int *insertion = smalloc(s->nregions * sizeof(int));
+	int *deletion  = smalloc(s->nregions * sizeof(int));
+        int cycle, iregion, i, j;
  
-	read = s->tileViz;
-	read_length = s->read_length[read];
-	irt = (read > 1 ? 1 : 0) * N_CYCLES;
-	for (cycle = 0; cycle < read_length; cycle++, irt++) {
-		RegionTable *cycle_rt = rts[itile];
-		for (iregion = 0; iregion < rt->nregions; iregion++) {
-			int n = cycle_rt->align[iregion]
-			    + cycle_rt->insertion[iregion]
-			    + cycle_rt->deletion[iregion]
-			    + cycle_rt->soft_clip[iregion]
-			    + cycle_rt->known_snp[iregion];
+        for (iregion = 0; iregion < s->nregions; iregion++) {
+            coverage[iregion] = 0;
+            mismatch[iregion]  = 0;
+            insertion[iregion] = 0;
+            deletion[iregion]  = 0;
+        }
 
-			// coverage should be the same for all cycles
-			rt->align[iregion] = n;
-
-			// for all other values take the maximum over all cycles
-			rt->mismatch[iregion] = max(rt->mismatch[iregion], cycle_rt->mismatch[iregion]);
-			rt->insertion[iregion] = max(rt->insertion[iregion], cycle_rt->insertion[iregion]);
-			rt->deletion[iregion] = max(rt->deletion[iregion], cycle_rt->deletion[iregion]);
-			rt->soft_clip[iregion] = max(rt->soft_clip[iregion], cycle_rt->soft_clip[iregion]);
-			rt->known_snp[iregion] = max(rt->known_snp[iregion], cycle_rt->known_snp[iregion]);
-		}
+        for (cycle = 0; cycle < s->read_length[read]; cycle++) {
+                for (iregion = 0; iregion < s->nregions; iregion++) {
+                        RegionTable *rt = getRTS(itile,iregion,read,cycle);
+                        int n = rt->align + rt->insertion + rt->deletion + rt->soft_clip + rt->known_snp;
+                        // correct for sparse bins by assuming ALL bins have atleast REGION_MIN_COUNT clusters
+ 	                n = max(n, REGION_MIN_COUNT);
+                        // coverage should be the same for all cycles
+                        coverage[iregion] = n;
+                        // for all other values take the maximum over all cycles
+                        mismatch[iregion]  = max(mismatch[iregion],  rt->mismatch);
+                        insertion[iregion] = max(insertion[iregion], rt->insertion);
+                        deletion[iregion]  = max(deletion[iregion],  rt->deletion);
+    	        }
 	}
 
-	int i, j;
-
-	display ("tile=%-4d align          mismatch       insertion       deletion      soft_clip\n", tile);
+	display ("tile=%-4d coverage       mismatch       insertion      deletion\n", tile);
 	for (i = 0; i < s->nregions_y; i++) {
 		display("          ");
-		// truncate coverage to 15 so it displays as a single hex value
+                // truncate coverage to 15 so it displays as a single hex value
 		for (j = 0; j < s->nregions_x; j++) {
-			int k = j * s->nregions_y + i;
-			int v = rt->align[k] > 15 ? 15 : rt->align[k];
+			iregion = j * s->nregions_y + i;
+			int v = min(coverage[iregion], 15);
 			display("%1x", v);
 		}
 		display("    ");
 		// convert all other values to a percentage and bin 0(0%), 1(10%), .. 10(100%)
 		// correct for sparse bins by assuming ALL bins have atleast REGION_MIN_COUNT clusters
 		for (j = 0; j < s->nregions_x; j++) {
-			int k = j * s->nregions_y + i;
-			int n = rt->align[k] < REGION_MIN_COUNT ? REGION_MIN_COUNT : rt->align[k];
-			int v = (int)(10.0 * rt->mismatch[k] / n);
+			iregion = j * s->nregions_y + i;
+			int v = (int)(10.0 * mismatch[iregion] / coverage[iregion]);
 			display("%1x", v);
 		}
 		display("    ");
 		for (j = 0; j < s->nregions_x; j++) {
-			int k = j * s->nregions_y + i;
-			int n = rt->align[k] < REGION_MIN_COUNT ? REGION_MIN_COUNT : rt->align[k];
-			int v = (int)(10.0 * rt->insertion[k] / n);
+			iregion = j * s->nregions_y + i;
+			int v = (int)(10.0 * insertion[iregion] / coverage[iregion]);
 			display("%1x", v);
 		}
 		display("    ");
 		for (j = 0; j < s->nregions_x; j++) {
-			int k = j * s->nregions_y + i;
-			int n = rt->align[k] < REGION_MIN_COUNT ? REGION_MIN_COUNT : rt->align[k];
-			int v = (int)(10.0 * rt->deletion[k] / n);
-			display("%1x", v);
-		}
-		display("    ");
-		for (j = 0; j < s->nregions_x; j++) {
-			int k = j * s->nregions_y + i;
-			int n = rt->align[k] < REGION_MIN_COUNT ? REGION_MIN_COUNT : rt->align[k];
-			int v = (int)(10.0 * rt->soft_clip[k] / n);
+			iregion = j * s->nregions_y + i;
+			int v = (int)(10.0 * deletion[iregion] / coverage[iregion]);
 			display("%1x", v);
 		}
 		display("\n");
 	}
 	display("\n");
 
-//	freeRegionTable(rt);
-#endif
+        free(coverage);
+        free(mismatch);
+        free(insertion);
+        free(deletion);
 }
 
 /*
@@ -474,14 +464,14 @@ static void findBadRegions(Settings *s, int ntiles)
 		return;
 
 	for (itile = 0; itile < ntiles; itile++) {
-		int read, cycle, iregion;
+                int tile = tileArray[itile], read, cycle, iregion;
 
 		if (s->tileViz) displayTileViz(s,ntiles,itile);
 
-		// set the state for each region
-		for (iregion = 0; iregion < s->nregions; iregion++) {
-                        for (read = 0; read < N_READS; read++) {
-			        for (cycle = 0; cycle < s->read_length[read]; cycle++) {
+                for (read = 0; read < N_READS; read++) {
+                        for (cycle = 0; cycle < s->read_length[read]; cycle++) {
+                                // set the state for each region
+                                for (iregion = 0; iregion < s->nregions; iregion++) {
 					RegionTable *rt = getRTS(itile,iregion,read,cycle);
 					rt->state = 0;
 
@@ -505,6 +495,23 @@ static void findBadRegions(Settings *s, int ntiles)
 
 					//if (rt->state) display("%d:%d:%d:%d:%d:%d\t%02x\n", s->lane, tileArray[itile], iregion, read, cycle, n, rt->state);
 				}
+#if 1
+                                int mismatch = 0, insertion = 0, deletion = 0, soft_clip = 0;
+                                long quality_bases = 0, quality_errors = 0;
+                                for (iregion = 0; iregion < s->nregions; iregion++) {
+					RegionTable *rt = getRTS(itile,iregion,read,cycle);
+                                        if (rt->state & REGION_STATE_MISMATCH)  mismatch++;
+                                        if (rt->state & REGION_STATE_INSERTION) insertion++;
+                                        if (rt->state & REGION_STATE_DELETION)  deletion++;
+                                        if (rt->state & REGION_STATE_SOFT_CLIP) soft_clip++;
+                                        quality_bases  += rt->align;
+                                        quality_errors += rt->mismatch;
+                                }
+                                float ssc = 1.0;
+                                float quality = -10.0 * log10((quality_errors + ssc)/(quality_bases + ssc));
+                                fprintf(stderr, "tile=%-4d read=%1d cycle=%-3d quality=%.2f mismatch=%-4d insertion=%-4d deletion=%-4d soft_clip=%-4d\n",
+                                        tile, read, cycle, quality, mismatch, insertion, deletion, soft_clip);
+#endif
 			}
 		}
 	}
@@ -514,9 +521,8 @@ static void findBadRegions(Settings *s, int ntiles)
 
 void printFilter(Settings *s, int ntiles, FILE *fp) 
 {
-	int itile;
+        int itile, read, cycle, iregion;
 	Header hdr;
-	int read;
 
 #ifdef BINARY_FILTER_FILE
 	hdr.region_magic = strdup(REGION_MAGIC);
@@ -535,17 +541,29 @@ void printFilter(Settings *s, int ntiles, FILE *fp)
 #endif
         
 	for (itile = 0; itile < ntiles; itile++) {
-            int read;
                 for (read = 0; read < N_READS; read++) {
-                        int cycle;
                         for (cycle = 0; cycle < s->read_length[read]; cycle++) {
-                                int iregion;
+                                int tile_state = -1, nregions = 0;
+                                // excluding regions with low coverage do ALL regions have the same state
                                 for (iregion = 0; iregion < s->nregions; iregion++) {
                                         RegionTable *rt = getRTS(itile,iregion,read,cycle);
+                                        int state = rt->state;
+                                        // skip regions with low coverage
+                                        if (state == REGION_STATE_COVERAGE) continue;
+                                        // unset the low coverage bit
+                                        state &= ~REGION_STATE_COVERAGE;
+                                        if (tile_state == -1) tile_state = state;
+                                        if (state != tile_state) break;
+                                        nregions++;
+                                }
+                                int flag = (iregion == s->nregions && ((100.0 * nregions/s->nregions) >= TILE_REGION_THRESHOLD)) ? 1 : 0;
+                                for (iregion = 0; iregion < s->nregions; iregion++) {
+                                        RegionTable *rt = getRTS(itile,iregion,read,cycle);
+                                        int state = flag ? tile_state | (rt->state & REGION_STATE_COVERAGE) : rt->state;
 #ifdef BINARY_FILTER_FILE
-                                        fputc(rt->state, fp);
+                                        fputc(state, fp);
 #else
-                                        if (rt->state) fprintf(fp, "%d:%d:%d:%d:%d:%02x\n", s->lane, tileArray[itile], iregion, read, cycle, rt->state);
+                                        if (state) fprintf(fp, "%d:%d:%d:%d:%d:%02x\n", s->lane, tileArray[itile], iregion, read, cycle, state);
 #endif
                                 }
 			}
@@ -1814,7 +1832,7 @@ int main(int argc, char **argv)
                    {"intensity-dir", 1, 0, 'i'},
                    {"snp_file", 1, 0, 's'},
                    {"snp-file", 1, 0, 's'},
-                   {"tileviz", 0, 0, 't'},
+                   {"tileviz", 1, 0, 't'},
                    {"help", 0, 0, 'h'},
                    {"filter", 1, 0, 'F'},
                    {0, 0, 0, 0}
