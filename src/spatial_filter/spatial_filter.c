@@ -154,6 +154,8 @@ typedef struct {
 	int nregions_y;
 	int nregions;
 	int compress;
+	int width;
+	int height;
 } Settings;
 
 static char *complement_table = NULL;
@@ -167,12 +169,12 @@ static void checked_chdir(const char *dir)
 static void setRegions(Settings * s)
 {
 	char *file = NULL;
-	size_t file_sz = strlen(s->intensity_dir) + 30;
 	int fd = -1;
 	ssize_t res;
 	uint32_t width, height;
 
 	if (s->intensity_dir) {
+		size_t file_sz = strlen(s->intensity_dir) + 30;
 		file = smalloc(file_sz);
 		snprintf(file, file_sz, "%s/../ImageSize.dat", s->intensity_dir);
 		fd = open(file, O_RDONLY);
@@ -181,16 +183,18 @@ static void setRegions(Settings * s)
 		if (4 != res) die("Error reading %s\n", file);
 		res = read(fd, &height, 4);
 		if (4 != res) die("Error reading %s\n", file);
+		s->width = width;
+		s->height = height;
 		close(fd);
 		free(file);
-		s->nregions_x = 1 + (int)(width / REGION_SIZE);
-		s->nregions_y = 1 + (int)(height / REGION_SIZE);
 	}
+	s->nregions_x = 1 + (int)(s->width / REGION_SIZE);
+	s->nregions_y = 1 + (int)(s->height / REGION_SIZE);
 
 	s->nregions = s->nregions_x * s->nregions_y;
 
-	display("Read tile width=%u height=%u from file %s\n", width, height, file);
-	display("nregions_x=%d nregions_y=%d nregions=%d\n", s->nregions_x, s->nregions_y, s->nregions);
+	if (!s->quiet) display("Read tile width=%u height=%u from file %s\n", s->width, s->height, file);
+	if (!s->quiet) display("nregions_x=%d nregions_y=%d nregions=%d\n", s->nregions_x, s->nregions_y, s->nregions);
 
 
 	return;
@@ -1645,7 +1649,8 @@ int main(int argc, char **argv)
 	settings.nregions_y = 0;
 	settings.nregions = 0;
 	settings.compress = 1;
-
+	settings.width = 0;
+	settings.height = 0;
 	settings.cmdline = get_command_line(argc, argv);
 
 	static struct option long_options[] = {
@@ -1656,11 +1661,13 @@ int main(int argc, char **argv)
                    {"tileviz", 1, 0, 't'},
                    {"help", 0, 0, 'h'},
                    {"filter", 1, 0, 'F'},
+                   {"width", 1, 0, 'x'},
+                   {"height", 1, 0, 'y'},
                    {0, 0, 0, 0}
                };
 
 	char c;
-	while ( (c = getopt_long(argc, argv, "dcafuDF:o:i:p:s:t:qh?", long_options, 0)) != -1) {
+	while ( (c = getopt_long(argc, argv, "dcafuDF:o:i:p:s:x:y:t:qh?", long_options, 0)) != -1) {
 		switch (c) {
 			case 'd':	settings.dump = 1; break;
 			case 'D':	dumpFilter = 1; break;
@@ -1673,6 +1680,8 @@ int main(int argc, char **argv)
 			case 'i':	override_intensity_dir = optarg;	break;
 			case 's':	settings.snp_file = optarg;	break;
 			case 'F':	settings.filter = optarg;	break;
+			case 'x':	settings.width = atoi(optarg);	break;
+			case 'y':	settings.height = atoi(optarg);	break;
 			case 'q':	settings.quiet = 1;			break;
 			case 'h':
 			case '?':	usage(0);					break;
@@ -1713,7 +1722,9 @@ int main(int argc, char **argv)
 			die("ERROR: can't process intensity dir: %s\n", override_intensity_dir);
 		}
 	} else {
-		die("ERROR: you must specify an intensity dir\n");
+		if (!settings.width || !settings.height) {
+			die("ERROR: you must specify an intensity dir or Width and Height\n");
+		}
 	}
 
 	/* set the number of regions by reading the intensity file */
