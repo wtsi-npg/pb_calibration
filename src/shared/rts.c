@@ -138,7 +138,6 @@ static int keyComp(const void *k1, const void *k2)
 {
 	int key = *(int *)k1;
 	int mem = *(int *)k2;
-display("Comparing key %d with member %d\n", key, mem);
 	return key == mem;
 }
 

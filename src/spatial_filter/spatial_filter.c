@@ -166,6 +166,13 @@ static void checked_chdir(const char *dir)
 
 }
 
+int xy2region(Settings *s, int x, int y)
+{
+	float x_coord = (float)(x - COORD_SHIFT) / (float)COORD_FACTOR;
+	float y_coord = (float)(y - COORD_SHIFT) / (float)COORD_FACTOR;
+	return (int)(x_coord / REGION_SIZE) * s->nregions_y + (int)(y_coord / REGION_SIZE);
+}
+
 static void setRegions(Settings * s)
 {
 	char *file = NULL;
@@ -683,7 +690,7 @@ const char *parse_next_int(const char *str, int *val, const char *sep)
 /*
  * cts - parse bam file line
  *
- * returns 0 on success, 1 on expected failure.
+ * returns 0 on success, 1 on expected failure, 2 to ignore this entry.
  */
 static
 int
@@ -719,8 +726,9 @@ parse_bam_file_line_full(Settings *s,
 	if (0 > samread(fp, bam))
 		return 1;
 
-	if (BAM_FUNMAP & bam->core.flag)
-		return 0;
+	if (BAM_FUNMAP & bam->core.flag) {
+		return 2;
+	}
 
 	lane = -1;
 	tile = -1;
@@ -758,14 +766,17 @@ parse_bam_file_line_full(Settings *s,
 	}
 
 #ifdef QC_FAIL
-	if (BAM_FQCFAIL & bam->core.flag)
-		return 0;
+	if (BAM_FQCFAIL & bam->core.flag) {
+		return 2;
+}
 #endif
 
 #ifdef PROPERLY_PAIRED
-	if (BAM_FPAIRED & bam->core.flag)
-		if (0 == (BAM_FPROPER_PAIR & bam->core.flag))
-			return 0;
+	if (BAM_FPAIRED & bam->core.flag) {
+		if (0 == (BAM_FPROPER_PAIR & bam->core.flag)) {
+			return 2;
+	}
+}
 #endif
 
 	pos = bam->core.pos;
@@ -928,71 +939,6 @@ parse_bam_file_line_full(Settings *s,
 	*bam_tile = tile;
 	*bam_x = x;
 	*bam_y = y;
-	*bam_read = read;
-
-	return 0;
-}
-
-/*
- * cts - parse bam file line
- *
- * returns 0 on success, 1 on expected failure.
- */
-static
-int
-parse_bam_file_line(Settings *s,
-		    samfile_t *fp,
-		    bam1_t *bam,
-		    int *bam_lane,
-		    int *bam_tile, 
-			int *bam_read)
-{
-
-	char *name;
-	const char *sep = ":#/";
-	const char *cp;
-	int lane, tile, x, y, read;
-
-	if (0 > samread(fp, bam))
-		return 1;
-
-	lane = -1;
-	tile = -1;
-	x = -1;
-	y = -1;
-
-	name = bam1_qname(bam);
-	cp = strchr(name, ':');
-	if (NULL == cp) {
-		die("ERROR: Invalid run in name: \"%s\"\n", name);
-	}
-	cp++;
-	cp = parse_next_int(cp, &lane, sep);
-	cp = parse_next_int(cp, &tile, sep);
-	cp = parse_next_int(cp, &x, sep);
-	cp = parse_next_int(cp, &y, sep);
-
-	if (lane > N_LANES + 1 || lane < 1) {
-		die("ERROR: Invalid lane value in name: \"%s\"\n", name);
-	}
-
-	if (tile <= 0) {
-		die("ERROR: Invalid tile value in name: \"%s\"\n", name);
-	}
-
-	read = 0;
-	if (BAM_FPAIRED & bam->core.flag) {
-		if (BAM_FREAD1 & bam->core.flag)
-			read = 1;
-		if (BAM_FREAD2 & bam->core.flag)
-			read = 2;
-		if (read == 0) {
-			die("ERROR: Unable to determine read from flag %d for read: \"%s\"\n", bam->core.flag, name);
-		}
-	}
-
-	*bam_lane = lane;
-	*bam_tile = tile;
 	*bam_read = read;
 
 	return 0;
@@ -1180,11 +1126,7 @@ static void bam_header_add_pg(Settings *s, bam_header_t *bam_header)
 static int updateRegionTable(Settings *s, int itile, int read, int x, int y, int *read_mismatch)
 {
 
-	float x_coord = (float)(x - COORD_SHIFT) / (float)COORD_FACTOR;
-	float y_coord = (float)(y - COORD_SHIFT) / (float)COORD_FACTOR;
-	int iregion =
-	    (int)(x_coord / REGION_SIZE) * s->nregions_y +
-	    (int)(y_coord / REGION_SIZE);
+	int iregion = xy2region(s, x, y);
 	int cycle;
 
         /* update region table */
@@ -1237,8 +1179,7 @@ void makeRegionTable(Settings *s, samfile_t *fp_bam, int *ntiles, size_t * nread
 
 	/* loop over reads in the bam file */
 	while (1) {
-		int bam_lane = -1, bam_tile = -1, bam_read = -1, bam_x =
-		    -1, bam_y = -1, read_length;
+		int bam_lane = -1, bam_tile = -1, bam_read = -1, bam_x = -1, bam_y = -1, read_length;
 
 		if (0 != parse_bam_file_line_full(s, fp_bam, bam,
 						  &bam_lane, &bam_tile, &bam_x,
@@ -1315,6 +1256,11 @@ void makeRegionTable(Settings *s, samfile_t *fp_bam, int *ntiles, size_t * nread
 int filter_bam(Settings * s, samfile_t * fp_in_bam, samfile_t * fp_out_bam,
 	       size_t * nreads, size_t * nfiltered)
 {
+	static const int bam_read_buff_size = 1024;
+	char bam_read_seq[bam_read_buff_size];
+	int bam_read_qual[bam_read_buff_size];
+	int bam_read_mismatch[bam_read_buff_size];
+
 	int lane = -1;
 	size_t nreads_bam = 0;
 	int nfiltered_bam = 0;
@@ -1331,11 +1277,17 @@ int filter_bam(Settings * s, samfile_t * fp_in_bam, samfile_t * fp_out_bam,
 
 	/* loop over reads in the input bam file */
 	while (1) {
-		int bam_lane = -1, bam_tile = -1, bam_read = -1, read_length;
-
-		if (0 != parse_bam_file_line(s, fp_in_bam, bam, &bam_lane, &bam_tile, &bam_read)) {
-			break;
-		}
+		int bam_lane = -1, bam_tile = -1, bam_read = -1, read_length, bam_x=-1, bam_y=-1;
+		int result;
+		result = parse_bam_file_line_full(s, fp_in_bam, bam,
+						  &bam_lane, &bam_tile, &bam_x,
+						  &bam_y,
+						  &bam_read, bam_read_seq,
+						  bam_read_qual,
+						  bam_read_mismatch,
+						  bam_read_buff_size);
+		if (result == 1) break;
+		if (result == 2) continue;
 
 		read_length = bam->core.l_qseq;
 		if (0 == read_length)
@@ -1358,20 +1310,20 @@ int filter_bam(Settings * s, samfile_t * fp_in_bam, samfile_t * fp_out_bam,
 		}
 
 		char state = 0;
-//		state = getFilterData(bam_tile, bam_read, cycle, region);
-		if (state & REGION_STATE_MASK) {
-			nfiltered_bam++;
-			if (s->qcfail) {
-				bam->core.flag |= BAM_FQCFAIL;
-			} else {
-				continue;
+		int iregion = xy2region(s, bam_x, bam_y);
+		int read;
+		for (read = 0; read < N_READS; read++) {
+			int cycle;
+			for (cycle = 0; cycle < s->read_length[read]; cycle++) {
+				state = getFilterData(bam_tile, read, cycle, iregion);
+				if (state & REGION_STATE_MASK) {
+					nfiltered_bam++;
+					if (s->qcfail) bam->core.flag |= BAM_FQCFAIL;
+				}
 			}
 		}
 
-		if (0 > samwrite(fp_out_bam, bam)) {
-			die("Error: writing bam file\n");
-		}
-
+		if (0 > samwrite(fp_out_bam, bam)) die("Error: writing bam file\n");
 		nreads_bam++;
 	}
 
@@ -1557,8 +1509,8 @@ void applyFilter(Settings *s)
 		samclose(fp_input_bam);
 		samclose(fp_output_bam);
 
-		display("Processed %8lu traces\n", nreads);
-		display("Filtered %8lu traces\n", nfiltered);
+		if (!s->quiet) display("Processed %8lu traces\n", nreads);
+		if (!s->quiet) display("Filtered %8lu traces\n", nfiltered);
 
 		/* back to where we belong */
 		checked_chdir(s->working_dir);
