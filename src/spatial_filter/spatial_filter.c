@@ -193,7 +193,6 @@ static void setRegions(Settings * s)
 		s->width = width;
 		s->height = height;
 		close(fd);
-		free(file);
 	}
 	s->nregions_x = 1 + (int)(s->width / REGION_SIZE);
 	s->nregions_y = 1 + (int)(s->height / REGION_SIZE);
@@ -202,6 +201,7 @@ static void setRegions(Settings * s)
 
 	if (!s->quiet) display("Read tile width=%u height=%u from file %s\n", s->width, s->height, file);
 	if (!s->quiet) display("nregions_x=%d nregions_y=%d nregions=%d\n", s->nregions_x, s->nregions_y, s->nregions);
+	if (file) free(file);
 
 
 	return;
@@ -1181,15 +1181,16 @@ void makeRegionTable(Settings *s, samfile_t *fp_bam, int *ntiles, size_t * nread
 	while (1) {
 		int bam_lane = -1, bam_tile = -1, bam_read = -1, bam_x = -1, bam_y = -1, read_length;
 
-		if (0 != parse_bam_file_line_full(s, fp_bam, bam,
+		int result;
+		result = parse_bam_file_line_full(s, fp_bam, bam,
 						  &bam_lane, &bam_tile, &bam_x,
 						  &bam_y,
 						  &bam_read, bam_read_seq,
 						  bam_read_qual,
 						  bam_read_mismatch,
-						  bam_read_buff_size)) {
-			break;
-		}
+						  bam_read_buff_size);
+		if (result == 1) break;
+		if (result == 2) continue;
 
 		read_length = strlen(bam_read_seq);
 		if (0 == read_length)
