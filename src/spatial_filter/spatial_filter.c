@@ -98,6 +98,8 @@
 #include <die.h>
 #include <rts.h>
 
+#include "version.h"
+
 #define PBP_VERSION PACKAGE_VERSION
 
 const char *pbs_c_rev = "$Revision$";
@@ -1373,6 +1375,7 @@ static void usage(int code)
 	fprintf(usagefp, "    -D         just dump filter file in ascii text format to stdout\n");
 	fprintf(usagefp, "    -c         calculate filter files\n");
 	fprintf(usagefp, "    -a         apply filter files\n");
+	fprintf(usagefp, "    -v         display version and exit\n");
 	fprintf(usagefp, "\n");
 	fprintf(usagefp, "  options:\n");
 	fprintf(usagefp, "    -i --intensity-dir dir\n");
@@ -1616,12 +1619,15 @@ int main(int argc, char **argv)
                    {"filter", 1, 0, 'F'},
                    {"width", 1, 0, 'x'},
                    {"height", 1, 0, 'y'},
+                   {"version", 0, 0, 'v'},
                    {0, 0, 0, 0}
                };
 
 	char c;
-	while ( (c = getopt_long(argc, argv, "dcafuDF:o:i:p:s:x:y:t:qh?", long_options, 0)) != -1) {
+	while ( (c = getopt_long(argc, argv, "vdcafuDF:o:i:p:s:x:y:t:qh?", long_options, 0)) != -1) {
 		switch (c) {
+			case 'v':	display("spatial_filter: Version %s\n", version); 
+						exit(0);
 			case 'd':	settings.dump = 1; break;
 			case 'D':	dumpFilter = 1; break;
 			case 'c':	settings.calculate = 1;		break;
