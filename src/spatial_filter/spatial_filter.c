@@ -1061,7 +1061,7 @@ static void append_header_text(bam_header_t * header, char *text, int len)
 	header->text[header->l_text] = 0;
 }
 
-static void bam_header_add_pg(Settings *s, bam_header_t *bam_header)
+static void bam_header_add_pg(Settings *s, bam_header_t *bam_header, char *cl)
 {
 	char *text;
 	char *hl, *endl, *endt;
@@ -1109,13 +1109,13 @@ static void bam_header_add_pg(Settings *s, bam_header_t *bam_header)
 		pglen =
 		    snprintf(pg, pgsize,
 			     "@PG\tID:%s\tPN:%s\tPP:%s\tDS:%s\tVN:" PBP_VERSION
-			     "\tCL:%s\n", id, pn, pp, ds, s->cmdline);
+			     "\tCL:%s\n", id, pn, pp, ds, cl);
 	} else {
 		pg = smalloc(pgsize);
 		pglen =
 		    snprintf(pg, pgsize,
 			     "@PG\tID:%s\tPN:%s\tDS:%s\tVN:" PBP_VERSION
-			     "\tCL:%s\n", pn, pn, ds, s->cmdline);
+			     "\tCL:%s\n", pn, pn, ds, cl);
 	}
 	assert(pglen < pgsize);
 
@@ -1268,13 +1268,6 @@ int filter_bam(Settings * s, samfile_t * fp_in_bam, samfile_t * fp_out_bam,
 	size_t nreads_bam = 0;
 	int nfiltered_bam = 0;
 
-	Header hdr;
-	FILE *fp;
-
-	fp = fopen(s->filter, "rb");
-	if (!fp) die("Can't open filter file %s\n", s->filter);
-	readHeader(fp, &hdr);
-	readFilterData(fp, &hdr);
 
 	bam1_t *bam = bam_init1();
 
@@ -1482,42 +1475,51 @@ void applyFilter(Settings *s)
 	char out_mode[5] = "wb";
 	char *out_bam_file = NULL;
 	bam_header_t *out_bam_header = NULL;
-		size_t nreads = 0;
-		size_t nfiltered = 0;
+	size_t nreads = 0;
+	size_t nfiltered = 0;
+	Header hdr;
+	FILE *fp;
 
-		if (0 == s->compress)
-			strcat(out_mode, "u");
+	fp = fopen(s->filter, "rb");
+	if (!fp) die("Can't open filter file %s\n", s->filter);
+	readHeader(fp, &hdr);
+	readFilterData(fp, &hdr);
+	fclose(fp);
 
-		fp_input_bam = samopen(s->in_bam_file, "rb", 0);
-		if (NULL == fp_input_bam) {
-			die("ERROR: can't open bam file file %s: %s\n", s->in_bam_file, strerror(errno));
-		}
+	if (0 == s->compress)
+		strcat(out_mode, "u");
 
-		out_bam_header = bam_header_dup(fp_input_bam->header);
-		bam_header_add_pg(s, out_bam_header);
+	fp_input_bam = samopen(s->in_bam_file, "rb", 0);
+	if (NULL == fp_input_bam) {
+		die("ERROR: can't open bam file file %s: %s\n", s->in_bam_file, strerror(errno));
+	}
 
-		out_bam_file =
-		    (NULL == s->output ? aprintf("/dev/stdout") : aprintf("%s/%s", s->working_dir, s->output));
-		fp_output_bam = samopen(out_bam_file, out_mode, out_bam_header);
-		if (NULL == fp_output_bam) {
-			die("ERROR: can't open bam file file %s: %s\n", out_bam_file, strerror(errno));
-		}
-		free(out_bam_file);
+	out_bam_header = bam_header_dup(fp_input_bam->header);
+	bam_header_add_pg(s, out_bam_header, s->cmdline);
+	out_bam_header = bam_header_dup(fp_input_bam->header);
+	bam_header_add_pg(s, out_bam_header, hdr.cmdLine);
 
-		bam_header_destroy(out_bam_header);
+	out_bam_file = (NULL == s->output ? aprintf("/dev/stdout") : aprintf("%s/%s", s->working_dir, s->output));
+	fp_output_bam = samopen(out_bam_file, out_mode, out_bam_header);
+	if (NULL == fp_output_bam) {
+		die("ERROR: can't open bam file file %s: %s\n", out_bam_file, strerror(errno));
+	}
+	free(out_bam_file);
 
-		if (-1 == filter_bam(s, fp_input_bam, fp_output_bam, &nreads, &nfiltered)) {
-			die("ERROR: failed to filter bam file %s\n", s->in_bam_file);
-		}
+	bam_header_destroy(out_bam_header);
 
-		samclose(fp_input_bam);
-		samclose(fp_output_bam);
+	if (-1 == filter_bam(s, fp_input_bam, fp_output_bam, &nreads, &nfiltered)) {
+		die("ERROR: failed to filter bam file %s\n", s->in_bam_file);
+	}
 
-		if (!s->quiet) display("Processed %8lu traces\n", nreads);
-		if (!s->quiet) display("Filtered %8lu traces\n", nfiltered);
+	samclose(fp_input_bam);
+	samclose(fp_output_bam);
 
-		/* back to where we belong */
-		checked_chdir(s->working_dir);
+	if (!s->quiet) display("Processed %8lu traces\n", nreads);
+	if (!s->quiet) display("Filtered %8lu traces\n", nfiltered);
+
+	/* back to where we belong */
+	checked_chdir(s->working_dir);
 }
 
 int dumpBAM(Settings *s)
