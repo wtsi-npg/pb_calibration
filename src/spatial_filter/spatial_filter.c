@@ -1496,7 +1496,6 @@ void applyFilter(Settings *s)
 
 	out_bam_header = bam_header_dup(fp_input_bam->header);
 	bam_header_add_pg(s, out_bam_header, s->cmdline);
-	out_bam_header = bam_header_dup(fp_input_bam->header);
 	bam_header_add_pg(s, out_bam_header, hdr.cmdLine);
 
 	out_bam_file = (NULL == s->output ? aprintf("/dev/stdout") : aprintf("%s/%s", s->working_dir, s->output));
