@@ -16,12 +16,8 @@ initialise ()
     # set defaults
     bam=""
     snp=""
-    runfolder_dir=""
     intensity_dir=""
-    mode="1"
-    run=""
-    lane=""
-    read="1"
+    filter=""
     cstart=""
     cstart1=""
     cstart2=""
@@ -30,7 +26,7 @@ initialise ()
     nR="6"
     prefix=""
 
-    TEMP=`getopt -a -o h --long bam:,snp:,runfolder_dir:,intensity_dir:,run:,lane:,read:,cstart:,cstart1:,cstart2:,t_filter:,nL:,nR:,prefix:,help -n $0 -- "$@"`
+    TEMP=`getopt -a -o h --long bam:,snp:,filter:,intensity_dir:,cstart:,cstart1:,cstart2:,t_filter:,nL:,nR:,prefix:,help -n $0 -- "$@"`
 
     if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
 
@@ -40,12 +36,9 @@ initialise ()
         case "$1" in
             --bam) bam=$2; echo "bam $bam" >&2; shift 2 ;;
             --snp) snp=$2; echo "snp file $snp" >&2; shift 2 ;;
+            --filter) filter=$2; echo "filter $filter" >&2; shift 2 ;;
             --intensity_dir) intensity_dir=$2; echo "intensity_dir $intensity_dir" >&2; shift 2 ;;
-            --runfolder_dir) runfolder_dir=$2; echo "runfolder_dir $runfolder_dir" >&2; shift 2 ;;
-            --run) run=$2; echo "run $run" >&2; shift 2 ;;
             --prefix) prefix=$2; echo "prefix $prefix" >&2; shift 2 ;;
-            --lane) lane=$2; echo "lane $lane" >&2; shift 2 ;;
-            --read) read=$2; echo "read $read" >&2; shift 2 ;;
             --cstart) cstart=$2; echo "cstart $cstart" >&2; shift 2 ;;
             --cstart1) cstart1=$2; echo "cstart1 $cstart1" >&2; shift 2 ;;
             --cstart2) cstart2=$2; echo "cstart2 $cstart2" >&2; shift 2 ;;
@@ -55,32 +48,33 @@ initialise ()
             -h|--help) echo "Usage: $0 [options]";
                        echo "                   ";
                        echo "       -bam <bam file>";
+                       echo "                   ";
+                       echo "       -intensity_dir <intensity directory>";
+                       echo "                   ";
                        echo "       -snp <snp file>";
                        echo "                   ";
-                       echo "       -intensity_dir      intensity directory";
+                       echo "       -filter <filter file>";
                        echo "                   ";
-                       echo "       -runfolder_dir      runfolder directory";
-                       echo "       -run <run>          run";
-                       echo "       -lane <lane>        lane";
-                       echo "       -read <read>        read";
-                       echo "                             default 1";
+                       echo "            or     ";
+                       echo "                   ";
+                       echo "       -t_filter <count>   filter tiles with q < mean - count * stdev";
+                       echo "                             default do not filter tiles";
+                       echo "                   ";
                        echo "       -cstart <cstart>    cycle number of first base";
                        echo "                   ";
                        echo "            or     ";
                        echo "                   ";
                        echo "       -cstart1 <cstart1>  cycle number of first base of read1";
                        echo "       -cstart2 <cstart2>  cycle number of first base of read2";
-                       echo "                             default 1";
-                       echo "       -t_filter <count>   filter tiles with q < mean - count * stdev";
-                       echo "                             default do not filter tiles";
+                       echo "                   ";
                        echo "       -nL <count>         number of bins in calibration table";
                        echo "                             between optimal cut and 0.25";
                        echo "                             default 3";
                        echo "       -nR <count>         number of bins in calibration table";
                        echo "                             between optimal cut and qmax";
                        echo "                             default 6";
-                       echo "       -prefix <prefix>";
-                       echo "                             default \$run_\$lane_\$read_train";
+                       echo "       -prefix <prefix>    output file prefix";
+                       echo "                             no default";
                        echo "                   ";
                        echo "       -h|--help   ";
                        echo "                   ";
@@ -96,17 +90,28 @@ initialise ()
     fi
 
     if [ -z $intensity_dir ] ; then
-        if [ -z $runfolder_dir ] && [ -z $run ] ; then
-            echo "If you do not specify intensity_dir you must specify runfolder_dir or run" >&2
-            exit 1
-        fi
+        echo "You must supply an intensity_dir" >&2
+        exit 1
+    fi
+
+    if [ -z $cstart ] && ( [ -z $cstart1 ] || [ -z $cstart2 ] ) ; then
+        echo "You must supply cstart OR cstart1 and cstart2" >&2
+        exit 1
+    fi
+
+    if [ $cstart ] && ( [ $cstart1 ] || [ $cstart2 ] ) ; then
+        echo "You must specify cstart OR cstart1 and cstart2 not both" >&2
+        exit 1
+    fi
+
+    if [ $filter ] && [ $t_filter ] ; then
+        echo "You can supply a filter file OR specify a tile filter not both" >&2
+        exit 1
     fi
 
     if [ -z $prefix ] ; then
-        if [ -z $run ] || [ -z $lane ] || [ -z $read ] ; then
-            echo "If you do not specify a prefix you must specify lane, run and read" >&2
-            exit 1
-        fi
+        echo "You must supply a prefix" >&2
+        exit 1
     fi
 }
 
@@ -118,37 +123,17 @@ tools=`readlink -f $tools`
 
 initialise "$@"
 
-if [ -z $intensity_dir ] ; then
-    if [ -z $runfolder_dir ] ; then
-        # use NPG to lookup the runfolder given the run
-        runfolder_dir=`perl -le 'use srpipe::runfolder; print srpipe::runfolder->new(id_run=>$ARGV[0])->runfolder_path' $run`
-        if [ -z $runfolder_dir ] ; then
-            echo "No runfolder for run $run" >&2
-            exit 1
-        fi
-    fi
-    if [ ! -d $runfolder_dir ] ; then
-        echo "Runfolder directory $runfolder_dir does not exist" >&2
-        exit 1
-    fi
-    echo "runfolder directory $runfolder_dir" >&2
-
-    intensity_dir=$runfolder_dir/Data/Intensities
+if [ ! -s $bam ] ; then
+    echo "bam file $bam does not exist" >&2
+    exit 1
 fi
+
 if [ ! -d $intensity_dir ] ; then
     echo "Intensity directory $intensity_dir does not exist" >&2
     exit 1
 fi
 echo "intensity directory $intensity_dir" >&2
 
-if [ ! -s $bam ] ; then
-    echo "bam file $bam does not exist" >&2
-    exit 1
-fi
-
-if [ -z $prefix ] ; then
-    prefix=${run}_${lane}_${read}_train
-fi
 echo "Output file prefix ${prefix}" >&2
 
 echo "Checking bam file" >&2
@@ -168,32 +153,42 @@ if [ $pair -gt 0 ] ; then
     count=`awk '/[0-9]+ with itself and mate mapped/ {print $1}' $stat_file`
     if [ $count -lt 200000 ] ; then
         echo "Only $count paired reads align < 200000" >&2
-        exit 0
+####        exit 0
     fi
 else
     count=`awk '/[0-9]+ mapped/ {print $1}' $stat_file`
     if [ $count -lt 100000 ] ; then
         echo "Only $count reads align < 100000" >&2
-        exit 0
+####        exit 0
     fi
 fi
 
-echo "Making calibration table" >&2
+echo "Making calibration table..." >&2
 
-parms=""
-if [ $t_filter ] ; then
-    parms="$parms -filter-bad-tiles $t_filter"
-fi
+parms="-intensity-dir $intensity_dir -nL $nL -nR $nR -p $prefix"
+
 if [ $snp ] ; then
     parms="$parms -snp_file $snp"
 fi
-if [ $ct ] ; then
-    parms="$parms -ct $ct -cstart $cstart"
-else
-    parms="$parms -ct $ct -cstart1 $cstart1 -cstart2 $cstart2"
+
+if [ $filter ] ; then
+    parms="$parms -filter_file $filter"
 fi
-$tools/calibration_pu $parms -intensity-dir $intensity_dir -read $read -ct $ct -nL $nL -nR $nR -p $prefix -s $bam
 
-echo "Checking calibration table" >&2
+if [ $t_filter ] ; then
+    parms="$parms -filter-bad-tiles $t_filter"
+fi
 
-$tools/check_caltable.pl -mode $mode -prefix $prefix -verbose -norename
+if [ $cstart ] ; then
+    parms="$parms -cstart $cstart"
+else
+    parms="$parms -cstart1 $cstart1 -cstart2 $cstart2"
+fi
+
+$tools/calibration_pu $parms $bam
+
+ct=${prefix}_purity_cycle_caltable.txt
+
+echo "Checking calibration table $ct" >&2
+
+$tools/check_caltable.pl -verbose -norename $ct
