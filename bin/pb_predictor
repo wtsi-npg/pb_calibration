@@ -14,18 +14,17 @@ initialise ()
 {
 
     # set defaults
-    run=""
-    runfolder_dir=""
-    intensity_dir=""
     bam=""
     ct=""
+    filter=""
+    intensity_dir=""
     cstart=""
     cstart1=""
     cstart2=""
     compress="1"
     output=""
 
-    TEMP=`getopt -a -o h --long ct:,bam:,output:,u,runfolder_dir:,intensity_dir:,run:,lane:,read:,cstart:,cstart1:,cstart2:,tiles:,help -n $0 -- "$@"`
+    TEMP=`getopt -a -o h --long bam:,ct:,filter:,intensity_dir:,cstart:,cstart1:,cstart2:,u,output:,help -n $0 -- "$@"`
 
     if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
 
@@ -35,26 +34,22 @@ initialise ()
         case "$1" in
             --bam) bam=$2; echo "input bam file $bam" >&2; shift 2 ;;
             --ct) ct=$2; echo "ct $ct" >&2; shift 2 ;;
+            --filter) filter=$2; echo "input filter file $filter" >&2; shift 2 ;;
             --intensity_dir) intensity_dir=$2; echo "intensity_dir $intensity_dir" >&2; shift 2 ;;
-            --run) run=$2; echo "run $run" >&2; shift 2 ;;
-            --runfolder_dir) runfolder_dir=$2; echo "runfolder_dir $runfolder_dir" >&2; shift 2 ;;
             --cstart) cstart=$2; echo "cstart $cstart" >&2; shift 2 ;;
             --cstart1) cstart1=$2; echo "cstart1 $cstart1" >&2; shift 2 ;;
             --cstart2) cstart2=$2; echo "cstart2 $cstart2" >&2; shift 2 ;;
             --u) compress=""; echo "do not compress output bam file" >&2; shift 1 ;;
             --output) output=$2; echo "output bam file $output" >&2; shift 2 ;;
-            -h|--help) echo "Usage: $0 [options] calibration_table";
+            -h|--help) echo "Usage: $0 [options]";
                        echo "                   ";
-                       echo "       -intensity_dir      intensity directory";
-                       echo "                   ";
-                       echo "            or     ";
-                       echo "                   ";
-                       echo "       -runfolder_dir      runfolder directory";
-                       echo "       -run <run>          run";
-                       echo "                   ";
+                       echo "       -bam <bam file>";
                        echo "                   ";
                        echo "       -ct <ct>            calibration table";
-                       echo "       -bam <bam file>"    input bam file;
+                       echo "                   ";
+                       echo "       -filter <filter file>";
+                       echo "                   ";
+                       echo "       -intensity_dir <intensity directory>";
                        echo "                   ";
                        echo "       -cstart <cstart>    cycle number of first base";
                        echo "                   ";
@@ -77,13 +72,6 @@ initialise ()
         esac
     done
 
-    if [ -z $intensity_dir ] ; then
-        if [ -z $run ] && [ -z $runfolder_dir ] ; then
-            echo "You must specify either run or runfolder_dir" >&2
-            exit 1
-        fi
-    fi
-
     if [ -z $ct ] ; then
         echo "You must specify ct" >&2
         exit 1
@@ -94,8 +82,18 @@ initialise ()
         exit 1
     fi
 
-    if [ $cstart ] && [ [ $cstart1 ] || [ $cstart2 ] ] ; then
-        echo "If you supply cstart or cstart1 and cstart2" >&2
+    if [ -z $intensity_dir ] ; then
+        echo "You must supply an intensity_dir" >&2
+        exit 1
+    fi
+
+    if [ -z $cstart ] && ( [ -z $cstart1 ] || [ -z $cstart2 ] ) ; then
+        echo "You must supply cstart OR cstart1 and cstart2" >&2
+        exit 1
+    fi
+
+    if [ $cstart ] && ( [ $cstart1 ] || [ $cstart2 ] ) ; then
+        echo "You must specify cstart OR cstart1 and cstart2 not both" >&2
         exit 1
     fi
 }
@@ -108,44 +106,31 @@ tools=`readlink -f $tools`
 
 initialise "$@"
 
-if [ -z $intensity_dir ] ; then
-    if [ -z $runfolder_dir ] ; then
-        # use NPG to lookup the runfolder given the run
-        runfolder_dir=`perl -le 'use srpipe::runfolder; print srpipe::runfolder->new(id_run=>$ARGV[0])->runfolder_path' $run`
-        if [ -z $runfolder_dir ] ; then
-            echo "No runfolder for run $run" >&2
-            exit 1
-        fi
-    fi
-    if [ ! -d $runfolder_dir ] ; then
-        echo "Runfolder directory $runfolder_dir does not exist" >&2
-        exit 1
-    fi
-    echo "runfolder directory $runfolder_dir" >&2
-
-    intensity_dir=$runfolder_dir/Data/Intensities
+if [ ! -s $bam ] ; then
+    echo "bam file $bam does not exist" >&2
+    exit 1
 fi
+
 if [ ! -d $intensity_dir ] ; then
     echo "Intensity directory $intensity_dir does not exist" >&2
     exit 1
 fi
 echo "intensity directory $intensity_dir" >&2
 
-if [ ! -s $bam ] ; then
-    echo "bam file $bam does not exist" >&2
-    exit 1
-fi        
-
 if [ $ct ] ; then
     if [ ! -s $ct ] ; then
       echo "Calibration table $ct does not exist" >&2
-      cexit 1
+      exit 1
     fi
 fi
 
 echo "Recalibrating..." >&2
 
-parms="-mode $mode -intensity-dir $intensity_dir -ct $ct -bam $bam"
+parms="-intensity-dir $intensity_dir -ct $ct"
+
+if [ $filter ] ; then
+    parms="$parms -filter_file $filter"
+fi
 
 if [ $cstart ] ; then
     parms="$parms -cstart $cstart"
@@ -157,10 +142,10 @@ if [ -z $compress ] ; then
     parms="$parms -u"
 fi
 
-if [ $prefix ] ; then
-    parms="$parms -p $prefix"
+if [ $output ] ; then
+    parms="$parms -o $output"
 else
     echo "Will write to stdout" >&2
 fi    
 
-$tools/predictor_pu $parms
+$tools/predictor_pu $parms $bam

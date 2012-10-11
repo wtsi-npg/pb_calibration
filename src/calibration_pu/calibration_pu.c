@@ -140,6 +140,7 @@
 #include <smalloc.h>
 #include <aprintf.h>
 #include <die.h>
+#include <rts.h>
 
 #define PBP_VERSION PACKAGE_VERSION
 
@@ -147,9 +148,8 @@ const char * pbs_c_rev = "$Revision$";
 
 #define MAX_CIF_CHUNK_BYTES 4194304
 
-#define N_LANES 8
-#define N_TILES 120
-#define N_CYCLES 250
+/* if we split data by state, using a filter file rather than tile, use tile as a place holder for state */
+#define N_STATES 2
 
 #define BASE_ALIGN      (1<<0)
 #define BASE_MISMATCH   (1<<1)
@@ -160,36 +160,27 @@ const char * pbs_c_rev = "$Revision$";
 
 #define ST_STATUS_GOOD  (1<<0)
 #define ST_STATUS_BAD   (1<<1)
-#define ST_STATUS_POOR  (1<<2)
 
 typedef struct {
-    int         lane;
     int         tile;
     int         read;
     int         cycle;
     int         nbins;
-    float       *purity;
     float       offset;
     float       delta;
     float       scale;
+    float       *purity;
     long        *num_bases;
     long        *num_errors;
-    long        align;
-    long        mismatch;
-    long        insertion;
-    long        deletion;
-    long        soft_clip;
-    long        known_snp;
+    long        total_bases;
     float       quality;
     int         status;
 } SurvTable;
 
 typedef struct {
-    int         lane;
     int         tile;
     int         read;
     int         cycle;
-    int         npred;
     int         nbins;
     float       *purity;
     long        *num_bases;
@@ -220,10 +211,14 @@ typedef struct {
     int read_length[3];
     int cstart[3];
     int quiet;
-    int read;
     int filter_bad_tiles;
     int n_bins_left;
     int n_bins_right;
+    int width;
+    int height;
+    int nregions_x;
+    int nregions_y;
+    int nregions;
 } Settings;
 
 typedef union {
@@ -263,6 +258,46 @@ checked_chdir(const char* dir){
 }
 
 static char *complement_table = NULL;
+
+int xy2region(Settings *s, int x, int y)
+{
+	float x_coord = (float)(x - COORD_SHIFT) / (float)COORD_FACTOR;
+	float y_coord = (float)(y - COORD_SHIFT) / (float)COORD_FACTOR;
+	return (int)(x_coord / REGION_SIZE) * s->nregions_y + (int)(y_coord / REGION_SIZE);
+}
+
+static void setRegions(Settings * s)
+{
+	if (s->intensity_dir) {
+                char *file = NULL;
+		size_t file_sz = strlen(s->intensity_dir) + 30;
+                int fd = -1;
+                ssize_t res;
+                uint32_t width, height;
+		file = smalloc(file_sz);
+		snprintf(file, file_sz, "%s/../ImageSize.dat", s->intensity_dir);
+		fd = open(file, O_RDONLY);
+		if (fd < 0) die("Couldn't open %s : %s\n", file, strerror(errno));
+		res = read(fd, &width, 4);
+		if (4 != res) die("Error reading %s\n", file);
+		res = read(fd, &height, 4);
+		if (4 != res) die("Error reading %s\n", file);
+		s->width = width;
+		s->height = height;
+                if (!s->quiet) display("Read tile width=%u height=%u from file %s\n", s->width, s->height, file);
+		close(fd);
+   	        free(file);
+	}
+
+	s->nregions_x = 1 + (int)(s->width / REGION_SIZE);
+	s->nregions_y = 1 + (int)(s->height / REGION_SIZE);
+
+	s->nregions = s->nregions_x * s->nregions_y;
+
+        if (!s->quiet) display("nregions_x=%d nregions_y=%d nregions=%d\n", s->nregions_x, s->nregions_y, s->nregions);
+        
+	return;
+}
 
 static void readSnpFile(Settings *s)
 {
@@ -325,75 +360,73 @@ static void readSnpFile(Settings *s)
     s->snp_hash = snp_hash;
 }
 
-static void initialiseSurvTable(Settings *s, SurvTable *st, int lane, int tile, int read, int cycle)
+static void initialiseSurvTable(Settings *s, SurvTable *st, int tile, int read, int cycle)
 {
     int i;
 
-    st->lane  = lane;
     st->tile  = tile;
     st->read  = read;
     st->cycle = cycle;
 
     st->nbins = 76;
 
-    st->purity = smalloc(st->nbins * sizeof(float));
     st->offset = 0.25;
-    st->delta = 0.01;
-    st->scale = 1.0 / st->delta;
+    st->delta  = 0.01;
+    st->scale  = 1.0 / st->delta;
+    st->purity = smalloc(st->nbins * sizeof(float));
     for (i=0;i<st->nbins;i++)
         st->purity[i] = st->offset + i * st->delta;
 
-    st->num_bases = smalloc(st->nbins * sizeof(long));
+    st->num_bases  = smalloc(st->nbins * sizeof(long));
     st->num_errors = smalloc(st->nbins * sizeof(long));
     for (i=0;i<st->nbins;i++) {
         st->num_bases[i] = 0;
         st->num_errors[i] = 0;
     }
 
-    st->align = 0;
-    st->mismatch = 0;
-    st->insertion = 0;
-    st->deletion = 0;
-    st->soft_clip = 0;
-    st->known_snp = 0;
-    st->quality = 0.0;
+    st->total_bases = 0;
 
     st->status = ST_STATUS_GOOD;
 }
 
-static void freeSurvTable(SurvTable *st)
+static void freeSurvTable(Settings *s, SurvTable **sts)
 {
-    if (st->nbins) {
-        free(st->purity);
-        free(st->num_bases);
-        free(st->num_errors);
+    int itile, read, cycle;
+    for(itile=0;itile<=N_TILES;itile++)
+        for(read=0;read<N_READS;read++)
+        {
+            if( NULL == sts[itile*N_READS+read]) continue;
+            for(cycle=0;cycle<s->read_length[read];cycle++)
+            {
+                SurvTable *st = sts[itile*N_READS+read] + cycle;
+                if (st->nbins) {
+                    free(st->purity);
+                    free(st->num_bases);
+                    free(st->num_errors);
 
-        st->nbins = 0;
-    }
+                    st->nbins = 0;
+                }
+            }
+        }
 }
 
-static void completeSurvTables(Settings *s, SurvTable *sts)
+static void completeSurvTable(Settings *s, SurvTable **sts)
 {
     float ssc = 1.0;
-    int read, read_length, ist, cycle, i;
+    int read, cycle, i;
 
-    if( NULL == sts )
-        return;
-
-    for(read=0;read<3;read++)
+    for(read=0;read<N_READS;read++)
     {
-        read_length = s->read_length[read];
-        ist = (read > 1 ? 1 : 0) * N_CYCLES;
-        for(cycle = 0; cycle < read_length; cycle++, ist++)
+        if( NULL == sts[read]) continue;
+        for(cycle=0;cycle<s->read_length[read];cycle++)
         {
-            SurvTable *st = sts + ist;
+            SurvTable *st = sts[read] + cycle;
             long quality_bases = 0;
             long quality_errors = 0;
 
             for(i=0;i<st->nbins;i++)
             {
-                st->align    += st->num_bases[i];
-                st->mismatch += st->num_errors[i];
+                st->total_bases += st->num_bases[i];
 
                 // bases with purity=0.25 are called as N and explicitly get a quality of 0
                 if( st->purity[i] <= 0.25 )
@@ -415,16 +448,13 @@ static void completeSurvTables(Settings *s, SurvTable *sts)
 static void findBadTiles(Settings *s, int ntiles, SurvTable **sts)
 {
     int filter = s->filter_bad_tiles;
-    int ist, read, read_length, cycle, itile;
+    int read, cycle, itile;
 
-    if (0 == filter || 0 >= ntiles || NULL == sts)
+    if (0 == filter || 0 >= ntiles)
         return;
     
-    for(read=0;read<3;read++)
-    {
-        read_length = s->read_length[read];
-        ist = (read > 1 ? 1 : 0) * N_CYCLES;
-        for(cycle = 0; cycle < read_length; cycle++, ist++)
+    for(read=0;read<N_READS;read++)
+        for(cycle=0;cycle<s->read_length[read];cycle++)
         {
             float qsum = 0.0;
             float q2sum = 0.0;
@@ -433,7 +463,7 @@ static void findBadTiles(Settings *s, int ntiles, SurvTable **sts)
             float qavg, q2avg, qstd, qmin;
 
             for(itile=0;itile<ntiles;itile++) {
-                SurvTable *st = sts[itile] + ist;
+                SurvTable *st = sts[itile*N_READS+read] + cycle;
                 qmax = (st->quality > qmax ? st->quality : qmax);
             }
 
@@ -445,7 +475,7 @@ static void findBadTiles(Settings *s, int ntiles, SurvTable **sts)
             qmin = max(qmax - 20.0, 0.0);
 
             for(itile=0;itile<ntiles;itile++) {
-                SurvTable *st = sts[itile] + ist;
+                SurvTable *st = sts[itile*N_READS+read] + cycle;
                 /* skip tiles which are not good */
                 if( st->status != ST_STATUS_GOOD )
                     continue;
@@ -466,18 +496,18 @@ static void findBadTiles(Settings *s, int ntiles, SurvTable **sts)
             qmin = qavg - filter * qstd;
 
             for(itile=0;itile<ntiles;itile++) {
-                SurvTable *st = sts[itile] + ist;
+                SurvTable *st = sts[itile*N_READS+read] + cycle;
                 /* skip tiles which are not good */
                 if (st->status != ST_STATUS_GOOD)
                     continue;
                 if (st->quality < qmin)
-                    st->status = ST_STATUS_POOR;
+                    st->status = ST_STATUS_BAD;
             }
 
 #if 1
             fprintf(stderr, "read=%1d cycle=%-3d qavg=%.2f qstd=%.2f qmax=%.2f qmin=%.2f ", read, cycle, qavg, qstd, qmax, qmin);
             for(itile=0;itile<ntiles;itile++) {
-                SurvTable *st = sts[itile] + ist;
+                SurvTable *st = sts[itile*N_READS+read] + cycle;
                 if (st->status == ST_STATUS_GOOD )
                     fprintf(stderr, "%4d  %5.2f ", st->tile, st->quality);
                 else
@@ -487,72 +517,34 @@ static void findBadTiles(Settings *s, int ntiles, SurvTable **sts)
             fprintf(stderr, "\n");
 #endif
         }
-    }
-
-#if 1
-#define THRESHOLD 0.0
-    for(read=0;read<3;read++)
-    {
-        read_length = s->read_length[read];
-        ist = (read > 1 ? 1 : 0) * N_CYCLES;
-        for(cycle = 0; cycle < read_length; cycle++, ist++)
-        {
-            for(itile=0;itile<ntiles;itile++)
-            {
-                SurvTable *st = sts[itile] + ist;
-                float frac_indel, frac_soft_clip;
-
-                frac_indel = 100.0 * (st->insertion + st->deletion) / st->align;
-                frac_soft_clip = 100.0 * st->soft_clip / st->align;
-                if(THRESHOLD <= frac_indel || THRESHOLD <= frac_soft_clip)
-                {
-                    fprintf(stderr, "tile=%d read=%1d cycle=%d align=%ld quality=%.2f insertion=%ld deletion=%ld soft=%ld snp=%ld",
-                            st->tile, st->read, st->cycle, st->align, st->quality, st->insertion, st->deletion, st->soft_clip, st->known_snp);
-                    switch(st->status) {
-                    case ST_STATUS_GOOD:
-                        fprintf(stderr,"\tGOOD\n");
-                        break;
-                    case ST_STATUS_BAD:
-                        fprintf(stderr,"\tBAD\n");
-                        break;
-                    case ST_STATUS_POOR:
-                        fprintf(stderr,"\tPOOR\n");
-                        break;
-                    }
-                }
-            }
-        }
-    }
-#endif
 
     return;
 }
 
 static void makeGlobalSurvTable(Settings *s, int ntiles, SurvTable **sts)
 {
-    int nst = 2 * N_CYCLES;
-    int ist, read, read_length, cycle, itile, i;
+    int read, read_length, cycle, itile, i;
 
-    if (0 >= ntiles || NULL == sts )
+    if (0 >= ntiles)
         return;
 
-    sts[ntiles] = smalloc(nst * sizeof(SurvTable));
-    for(ist=0;ist<nst;ist++)
-        sts[ntiles][ist].nbins = 0;
+    findBadTiles(s, ntiles, sts);
 
-    for(read=0;read<3;read++)
+    for(read=0;read<N_READS;read++)
     {
         read_length = s->read_length[read];
-        ist = (read > 1 ? 1 : 0) * N_CYCLES;
-        for(cycle = 0; cycle < read_length; cycle++, ist++)
-        {
-            SurvTable *st = sts[ntiles] + ist;
+        if (0 == read_length) continue;
+        sts[ntiles*N_READS+read] = smalloc(read_length * sizeof(SurvTable));
 
-            initialiseSurvTable(s, st, sts[0][cycle].lane, -1, read, cycle);
+        for(cycle=0;cycle<read_length;cycle++)
+        {
+            SurvTable *st = sts[ntiles*N_READS+read] + cycle;
+
+            initialiseSurvTable(s, st, -1, read, cycle);
 
             for(itile=0;itile<ntiles;itile++)
             {
-                SurvTable *tile_st = sts[itile] + ist;
+                SurvTable *tile_st = sts[itile*N_READS+read] + cycle;
                 if (tile_st->status == ST_STATUS_GOOD )
                 {
                     for(i=0;i<st->nbins;i++)
@@ -560,27 +552,24 @@ static void makeGlobalSurvTable(Settings *s, int ntiles, SurvTable **sts)
                         st->num_bases[i] += tile_st->num_bases[i];
                         st->num_errors[i] += tile_st->num_errors[i];
                     }
-                    tile_st->align = 0;
+                    tile_st->total_bases = 0;
                 }
             }
         }
     }
 
-    completeSurvTables(s, sts[ntiles]);
+    completeSurvTable(s, &sts[ntiles*N_READS]);
 
     return;
 }
     
-static void outputSurvTable(Settings *s, int ntiles, SurvTable **sts)
+static void outputSurvTable(Settings *s, SurvTable **sts)
 {
     FILE *fp;
     int filename_sz;
     char *filename;
-    int read, read_length, ist, cycle, itile, i;
+    int itile, read, cycle, i;
 
-    if (0 >= ntiles || NULL == sts)
-        return;
-    
     filename_sz = (NULL == s->prefix ? 0 : strlen(s->prefix)) + 100;
     filename = smalloc(filename_sz);
 
@@ -595,22 +584,16 @@ static void outputSurvTable(Settings *s, int ntiles, SurvTable **sts)
 
     free(filename);
 
-    for(read=0;read<3;read++)
-    {
-        read_length = s->read_length[read];
-        ist = (read > 1 ? 1 : 0) * N_CYCLES;
-        for(cycle = 0; cycle < read_length; cycle++, ist++)
+    for(itile=0;itile<=N_TILES;itile++)
+        for(read=0;read<N_READS;read++)
         {
-            for(itile=0;itile<=ntiles;itile++)
+            if( NULL == sts[itile*N_READS+read]) continue;
+            for(cycle=0;cycle<s->read_length[read];cycle++)
             {
-                SurvTable *st = sts[itile] + ist;
+                SurvTable *st = sts[itile*N_READS+read] + cycle;
 
                 // skip st with no data
-                if( 0 == st->align )
-                    continue;
-
-                if( 0 < st->tile )
-                    fprintf(stderr, "bad tile=%4d read=%1d cycle=%3d\n", st->tile, read, cycle);
+                if( 0 == st->total_bases ) continue;
 
                 for(i=0;i<st->nbins;i++)
                     fprintf(fp, "%.2f\t%d\t%d\t%d\t%ld\t%ld\n",
@@ -618,7 +601,6 @@ static void outputSurvTable(Settings *s, int ntiles, SurvTable **sts)
                             st->num_bases[i], st->num_errors[i]);
             }
         }
-    }
 
     fclose(fp);
 }
@@ -627,21 +609,21 @@ static void initialiseCalTable(SurvTable *st, CalTable *ct)
 {
     int i;
 
-    ct->lane  = st->lane;
-    ct->read  = st->read;
     ct->tile  = st->tile;
+    ct->read  = st->read;
     ct->cycle = st->cycle;
+
     ct->nbins = st->nbins;
 
     ct->purity = smalloc(ct->nbins * sizeof(float));
     for(i=0;i<ct->nbins;i++)
         ct->purity[i] = st->purity[i];
 
-    ct->num_bases = smalloc(ct->nbins * sizeof(long));
+    ct->num_bases  = smalloc(ct->nbins * sizeof(long));
     ct->num_errors = smalloc(ct->nbins * sizeof(long));
     ct->frac_bases = smalloc(ct->nbins * sizeof(float));
     ct->error_rate = smalloc(ct->nbins * sizeof(float));
-    ct->quality = smalloc(ct->nbins * sizeof(float));
+    ct->quality    = smalloc(ct->nbins * sizeof(float));
     for(i=0;i<ct->nbins;i++)
     {
         ct->num_bases[i]  = st->num_bases[i];
@@ -654,19 +636,28 @@ static void initialiseCalTable(SurvTable *st, CalTable *ct)
     return;
 }
 
-static void freeCalTable(CalTable *ct)
+static void freeCalTable(Settings *s, CalTable **cts)
 {
-    if(0 == ct->nbins)
-        return;
+    int itile, read, cycle;
+    for(itile=0;itile<=N_TILES;itile++)
+        for(read=0;read<N_READS;read++)
+        {
+            if( NULL == cts[itile*N_READS+read]) continue;
+            for(cycle=0;cycle<s->read_length[read];cycle++)
+            {
+                CalTable *ct = cts[itile*N_READS+read] + cycle;
+                if(ct->nbins) {
+                    free(ct->purity);
+                    free(ct->num_bases);
+                    free(ct->num_errors);
+                    free(ct->frac_bases);
+                    free(ct->error_rate);
+                    free(ct->quality);
 
-    free(ct->purity);
-    free(ct->num_bases);
-    free(ct->num_errors);
-    free(ct->frac_bases);
-    free(ct->error_rate);
-    free(ct->quality);
-
-    ct->nbins = 0;
+                    ct->nbins = 0;
+                }
+            }
+        }
 }
 
 static void optimisePurityBins(Settings *s, SurvTable *st, CalTable *ct)
@@ -822,34 +813,32 @@ static void optimisePurityBins(Settings *s, SurvTable *st, CalTable *ct)
     }
 }
 
-static int makeCalTable(Settings *s, int ntiles, SurvTable **sts, CalTable **cts)
+static int makeCalTable(Settings *s, SurvTable **sts, CalTable **cts)
 {
     int nct = 0;
     float ssc = 1.0;
-    int itile, ict, read, read_length, ist, cycle, i;
+    int itile, read, read_length, cycle, i;
 
-    if (0 >= ntiles || NULL == sts)
-        return nct;
-
-    for(itile=0;itile<=ntiles;itile++)
-    {
-        nct = 2 * N_CYCLES;
-        cts[itile] = smalloc(nct * sizeof(CalTable));
-        for(ict=0;ict<nct;ict++)
-            cts[itile][ict].nbins = 0;
-
-        for(read=0;read<3;read++)
+    for(itile=0;itile<=N_TILES;itile++)
+        for(read=0;read<N_READS;read++)
         {
+            cts[itile*N_READS+read] = NULL;
+            if( NULL == sts[itile*N_READS+read]) continue;
+
             read_length = s->read_length[read];
-            ist = (read > 1 ? 1 : 0) * N_CYCLES;
-            for(cycle = 0; cycle < read_length; cycle++, ist++)
+            cts[itile*N_READS+read] = smalloc(read_length * sizeof(CalTable));
+            nct += read_length;
+            
+            for(cycle=0;cycle<read_length;cycle++)
             {
-                SurvTable *st = sts[itile] + ist;
-                CalTable *ct = cts[itile] + ist;
+                SurvTable *st = sts[itile*N_READS+read] + cycle;
+                CalTable *ct  = cts[itile*N_READS+read] + cycle;
+
+                // set number of bins in ct to 0
+                ct->nbins = 0;
 
                 // skip st with no data
-                if( 0 == st->align )
-                    continue;
+                if( 0 == st->total_bases ) continue;
 
                 initialiseCalTable(st, ct);
 
@@ -857,26 +846,22 @@ static int makeCalTable(Settings *s, int ntiles, SurvTable **sts, CalTable **cts
 
                 for(i=0;i<ct->nbins;i++)
                 {
-                    ct->frac_bases[i] = ((float)ct->num_bases[i]) / ((float)st->align);
+                    ct->frac_bases[i] = ((float)ct->num_bases[i]) / ((float)st->total_bases);
                     ct->error_rate[i] = (ct->num_errors[i] + ssc)/(ct->num_bases[i] + ssc);
                     ct->quality[i] = -10.0 * (log10(ct->error_rate[i]));
                 }
             }
         }
-    }
 
     return nct;
 }
 
-static void outputCalTable(Settings *s, int ntiles, CalTable **cts)
+static void outputCalTable(Settings *s, CalTable **cts)
 {
     FILE *fp;
     int filename_sz;
     char *filename;
-    int read, read_length, ist, cycle, itile, i;
-
-    if( 0 >= ntiles || NULL == cts )
-        return;
+    int itile, read, cycle, i;
 
     filename_sz = (NULL == s->prefix ? 0 : strlen(s->prefix)) + 100;
     filename = smalloc(filename_sz);
@@ -891,19 +876,16 @@ static void outputCalTable(Settings *s, int ntiles, CalTable **cts)
 
     free(filename);
 
-    for(read=0;read<3;read++)
-    {
-        read_length = s->read_length[read];
-        ist = (read > 1 ? 1 : 0) * N_CYCLES;
-        for(cycle = 0; cycle < read_length; cycle++, ist++)
+    for(itile=0;itile<=N_TILES;itile++)
+        for(read=0;read<N_READS;read++)
         {
-            for(itile=0;itile<=ntiles;itile++)
+            if( NULL == cts[itile*N_READS+read]) continue;
+            for(cycle=0;cycle<s->read_length[read];cycle++)
             {
-                CalTable *ct = cts[itile] + ist;
+                CalTable *ct = cts[itile*N_READS+read] + cycle;
 
-                // skip ct with no data
-                if( 0 == ct->nbins )
-                    continue;
+                // skip ct with no bins
+                if( 0 == ct->nbins ) continue;
 
                 for(i=0;i<ct->nbins;i++)
                 {
@@ -918,7 +900,6 @@ static void outputCalTable(Settings *s, int ntiles, CalTable **cts)
                 }
             }
         }
-    }
 
     fclose(fp);
 }
@@ -1201,7 +1182,6 @@ parse_bam_file_line(Settings *s,
     x = -1;
     y = -1;
     offset = -1;
-    read = -1;
 
     name = bam1_qname(bam);
     cp = strchr(name,':');
@@ -1245,12 +1225,13 @@ parse_bam_file_line(Settings *s,
         exit(EXIT_FAILURE);
     }
 
+    read = 0;
     if(BAM_FPAIRED & bam->core.flag){
         if(BAM_FREAD1 & bam->core.flag)
             read = 1;
         if(BAM_FREAD2 & bam->core.flag)
             read = 2;
-        if(read == -1){
+        if(read == 0){
             fprintf(stderr,"ERROR: Unable to determine read from flag %d for read: \"%s\"\n",bam->core.flag,name);
             exit(EXIT_FAILURE);
         }
@@ -1807,29 +1788,45 @@ static void free_cif_data(CifData *cif_data) {
     free(cif_data);
 }
 
-static int updateSurvTable(Settings *s, SurvTable *sts,
-                           CifData *cif_data, int x, int y, size_t spot_num, int read,
-                           char *read_seq, int *read_qual, char *read_ref, int *read_mismatch,
-                           int dir, char *chrom, int pos, FILE *fp_caldata) {
+static int updateSurvTable(Settings *s, SurvTable **sts, CifData *cif_data,
+                           size_t spot_num, int tile, int x, int y, int read, int *read_mismatch,
+                           char *read_seq, int *read_qual, char *read_ref, samfile_t *fp, bam1_t *bam, FILE *fp_caldata) {
 
     int cstart = s->cstart[read];
     int read_length = s->read_length[read];
+    int iregion = -1;
     int c, b;
 
     assert((cstart + read_length) <= cif_data->ncycles);
 
+    if (s->nregions) iregion = xy2region(s, x, y);
+
 #ifdef CALDATA
-    fprintf(fp_caldata, "%d\t%d\t%d\t%s\t%d\t", x, y, dir, chrom, pos);
+    {
+        int dir = BAM_FREVERSE & bam->core.flag ? 1 : 0;
+        char *chrom = fp->header->target_name[bam->core.tid];
+        int pos = bam->core.pos;
+
+        fprintf(fp_caldata, "%d\t%d\t%d\t%s\t%d\t", x, y, dir, chrom, pos);
+    }
 #endif
 
     /* update survival table */
     for (c = cstart, b = 0; b < read_length; c++, b++) {
         CifCycleData *cycle = cif_data->cycles + c;
+        SurvTable *st;
         int channel;
         int bin[cycle->num_channels];
         float purity = -1.0;
-        SurvTable *st = sts + b;
         int ibin;
+
+        /* set cycle ct */
+        if (s->nregions) {
+            int state = (getFilterData(tile, read, b, iregion) & REGION_STATE_MISMATCH) ? 1 : 0;
+            st = sts[state*N_READS+read] + b;
+        }else{
+            st = sts[read] + b;
+        }
 
         read_cif_chunk(s, cycle, spot_num);
         for (channel = 0; channel < cycle->num_channels; channel++) {
@@ -1858,15 +1855,9 @@ static int updateSurvTable(Settings *s, SurvTable *sts,
 
         ibin = st->scale * (purity - st->offset) + 0.5;
 
-        if( read_mismatch[b] & BASE_INSERTION )
-            st->insertion++;
-        if( read_mismatch[b] & BASE_DELETION )
-            st->deletion++;
-        if( read_mismatch[b] & BASE_SOFT_CLIP )
-            st->soft_clip++;
         if( read_mismatch[b] & BASE_KNOWN_SNP ) {
-            st->known_snp++;
-        } else {
+            // don't count these
+        } else{
             if( read_mismatch[b] & BASE_ALIGN )
                 st->num_bases[ibin]++;
             if( read_mismatch[b] & BASE_MISMATCH )
@@ -1920,6 +1911,7 @@ static int updateSurvTable(Settings *s, SurvTable *sts,
             }
         }
 #endif
+
     }
     
 #ifdef CALDATA
@@ -1950,6 +1942,8 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
     int lane = -1;
     int tile = -1;
 
+    int tiles[N_TILES];
+
     int ntiles_bam = 0;
     int nreads_bam = 0;
 
@@ -1962,15 +1956,21 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
 
     bam1_t *bam = bam_init1();
 
-    int itile = -1;
+    int itile, read;
 
     checked_chdir(s->intensity_dir);
 
+    for(itile=0;itile<=N_TILES;itile++)
+        for(read=0;read<N_READS;read++)
+            sts[itile*N_READS+read] = NULL;
+
+    itile = -1;
+
     /* loop over reads in the bam file */
     while (1){
-        int bam_lane = -1, bam_tile = -1, bam_read = -1, bam_x = -1, bam_y = -1, read_length;
+        int bam_lane = -1, bam_tile = -1, bam_x = -1, bam_y = -1, bam_read = -1, read_length;
         size_t bam_offset = 0;
-        int ist, cycle;
+        int cycle;
 
         if (0 != parse_bam_file_line(s, fp_bam, bam,
                                      &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_offset, &bam_read,
@@ -1991,7 +1991,19 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
                 exit(EXIT_FAILURE);
             }
             s->read_length[bam_read] = read_length;
+
+            if (s->nregions) {
+                /* if we have a filter file we allocate memory for each state now */
+                int state;
+                for(state=0;state<N_STATES;state++) {
+                    sts[state*N_READS+bam_read] = smalloc(read_length * sizeof(SurvTable));
+                    nst += read_length;
+                    for(cycle=0;cycle<read_length;cycle++)
+                        initialiseSurvTable(s, sts[state*N_READS+bam_read]+cycle, state, bam_read, cycle);
+                }
+            }
         }
+
         if (s->read_length[bam_read] != read_length) {
             fprintf(stderr,
                     "Error: inconsistent read lengths "
@@ -2040,21 +2052,18 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
             }
 
             for (itile=0; itile<ntiles_bam; itile++)
-                if (tile == sts[itile][0].tile) {
+                if (tile == tiles[itile]) {
                     fprintf(stderr,"ERROR: alignments are not sorted by tile.\n");
                     exit(EXIT_FAILURE);
                 }
 
             ntiles_bam++;
-            if(ntiles_bam >= N_TILES){
+            if(ntiles_bam > N_TILES){
                 fprintf(stderr,"ERROR: too many tiles %d > %d.\n", ntiles_bam, N_TILES);
                 exit(EXIT_FAILURE);
             }
 
-            nst = 2 * N_CYCLES;
-            sts[itile] = smalloc(nst * sizeof(SurvTable));
-            for(ist=0;ist<nst;ist++)
-                sts[itile][ist].nbins = 0;
+            tiles[itile] = tile;
 
 #ifdef CALDATA
             if (NULL != fp_caldata) fclose(fp_caldata);
@@ -2068,30 +2077,43 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
 #endif            
         }
 
-        ist = (bam_read > 1 ? 1 : 0) * N_CYCLES;
-        if (0 == sts[itile][ist].nbins)
-            for(cycle = 0; cycle < read_length; ist++, cycle++)
-                initialiseSurvTable(s, sts[itile] + ist, lane, tile, bam_read, cycle);
+        if (0 == s->nregions) {
+            /* if we don't have a filter file we allocate memory for this tile now */
+            if (NULL == sts[itile*N_READS+bam_read]) {
+                sts[itile*N_READS+bam_read] = smalloc(read_length * sizeof(SurvTable));
+                nst += read_length;
+                for(cycle=0;cycle<read_length;cycle++)
+                    initialiseSurvTable(s, sts[itile*N_READS+bam_read]+cycle, tile, bam_read, cycle);
+            }
+        }
+        
 
-        ist = (bam_read > 1 ? 1 : 0) * N_CYCLES;
-        if (0 != updateSurvTable(s, sts[itile] + ist, cif_data, bam_x, bam_y, bam_offset, bam_read,
-                                 bam_read_seq, bam_read_qual, bam_read_ref, bam_read_mismatch,
-                                 (BAM_FREVERSE & bam->core.flag ? 1 : 0), fp_bam->header->target_name[bam->core.tid], bam->core.pos, fp_caldata)) {
+        if (0 != updateSurvTable(s, (s->nregions ? sts : &sts[itile*N_READS]), cif_data,
+                                 bam_offset, bam_tile, bam_x, bam_y, bam_read, bam_read_mismatch,
+                                 bam_read_seq, bam_read_qual, bam_read_ref, fp_bam, bam, fp_caldata)) {
             fprintf(stderr,"ERROR: updating quality values for tile %i.\n", tile);
             exit(EXIT_FAILURE);
         }
+        
         nreads_bam++;
     }
     
+    if (s->nregions) {
+        int state;
+        for(state=0;state<N_STATES;state++)
+            completeSurvTable(s, &sts[state*N_READS]);
+    }else{
+        for(itile=0;itile<ntiles_bam;itile++)
+            completeSurvTable(s, &sts[itile*N_READS]);
+    }
+    
+
     if (NULL != cif_data) free_cif_data(cif_data);
 
     if (NULL != fp_caldata) fclose(fp_caldata);
 
     bam_destroy1(bam);
     
-    for (itile=0; itile<ntiles_bam; itile++)
-        completeSurvTables(s, sts[itile]);
-
     *ntiles = ntiles_bam;
     *nreads = nreads_bam;
 
@@ -2183,6 +2205,8 @@ void usage(int code) {
     fprintf(usagefp, "                 default no prefix\n");
     fprintf(usagefp, "    -intensity-dir dir\n");
     fprintf(usagefp, "               Intensity directory\n");
+    fprintf(usagefp, "    -filter_file file\n");
+    fprintf(usagefp, "               spatial filter file\n");
     fprintf(usagefp, "    -filter-bad-tiles threshold\n");
     fprintf(usagefp, "               filter tiles with q < qavg - threshold * qstd\n");
     fprintf(usagefp, "                 will output a list of good/bad tiles\n");
@@ -2254,16 +2278,18 @@ char *get_command_line(int argc, char **argv) {
 int main(int argc, char **argv) {
 
     Settings settings;
-    int i, j;
+    int i;
     char *bam_file = NULL;
     samfile_t *fp_bam = NULL;
     const char *override_intensity_dir = NULL;
+    const char *filter_file = NULL;
+    Header filter_header;
     int ntiles = 0;
     int nreads = 0;
     int nst = 0;
-    SurvTable **sts = NULL;
+    SurvTable *sts[(N_TILES+1)*N_READS];
     int nct = 0;
-    CalTable **cts = NULL;
+    CalTable *cts[(N_TILES+1)*N_READS];
 
     settings.prefix = NULL;
     settings.quiet = 0;
@@ -2284,6 +2310,11 @@ int main(int argc, char **argv) {
     settings.n_cif_dirs     = 0;
     settings.cif_lane_index = NULL;
     settings.n_cif_lanes    = 0;
+    settings.width      = 0;
+    settings.height     = 0;
+    settings.nregions   = 0;
+    settings.nregions_x = 0;
+    settings.nregions_y = 0;
     
     settings.cmdline = get_command_line(argc, argv);
 
@@ -2306,6 +2337,13 @@ int main(int argc, char **argv) {
             }
             check_arg(i,argc,"-snp_file");
             settings.snp_file = argv[++i];
+	} else if (!strcmp(argv[i], "-filter_file")) {
+            if(filter_file != NULL) {
+		fprintf(stderr, "ERROR: -filter_file specified multiple times\n");
+                usage(1);
+            }
+            check_arg(i,argc,"-filter_file");
+            filter_file = argv[++i];
 
 	} else if (!strcmp(argv[i], "-q")) {
 	    settings.quiet = 1;
@@ -2376,13 +2414,6 @@ int main(int argc, char **argv) {
     if ((argc-i) < 1)
 	usage(0);
 
-#ifdef CALDATA
-    settings.caltable = 1;
-#endif
-#ifdef CHECK_BASECALL
-    settings.caltable = 1;
-#endif
-
     /* preserve starting directory b/c makeSurvTable is going to chdir all over the place */
     settings.working_dir = alloc_getcwd();
     if (NULL == settings.working_dir) {
@@ -2413,14 +2444,25 @@ int main(int argc, char **argv) {
         }
     }
 
-    bam_file = argv[i++];
+    /* read filter file */
+    if (NULL != filter_file) {
+        FILE *fp = fopen(filter_file, "rb");
+        if (!fp) die("Can't open filter file %s\n", filter_file);
+        readHeader(fp, &filter_header);
+        readFilterData(fp, &filter_header);
+
+        /* set the number of regions by reading the ImageSize.dat file */
+        setRegions(&settings);
+        if (0 == settings.nregions) {
+                die("ERROR: invalid tile size\n");
+        }
+    }
 
     /* Look for CIF directories */
     get_cif_dirs(&settings);
 
-    sts = smalloc((N_TILES+1) * sizeof(SurvTable *));
-
     /* open the bam file */
+    bam_file = argv[i++];
     fp_bam = samopen(bam_file, "rb", 0);
     if (NULL == fp_bam) {
         fprintf(stderr, "ERROR: can't open bam file file %s: %s\n",
@@ -2453,42 +2495,24 @@ int main(int argc, char **argv) {
     /* back to where we belong */
     checked_chdir(settings.working_dir);
 
-    findBadTiles(&settings, ntiles, sts);
+    if (0 == settings.nregions) makeGlobalSurvTable(&settings, ntiles, sts);
 
-    makeGlobalSurvTable(&settings, ntiles, sts);
+    outputSurvTable(&settings, sts);
 
-    outputSurvTable(&settings, ntiles, sts);
-
-    cts = smalloc((ntiles+1) * sizeof(CalTable *));
-
-    nct = makeCalTable(&settings, ntiles, sts, cts);
+    nct = makeCalTable(&settings, sts, cts);
     if (0 == nct) {
         fprintf(stderr,"ERROR: failed to make calibration table\n");
         exit(EXIT_FAILURE);
     }
 
-    outputCalTable(&settings, ntiles, cts);
+    outputCalTable(&settings, cts);
 
     /* close the bam file */
     samclose(fp_bam);
 
-    if (NULL != cts) {
-        for (i=0; i<=ntiles; i++) {
-            for (j=0; j<nct; j++)
-                freeCalTable(&cts[i][j]);
-            free(cts[i]);
-        }
-        free(cts);
-    }
+    freeCalTable(&settings, cts);
 
-    if (NULL != sts) {
-        for (i=0; i<=ntiles; i++) {
-            for (j=0; j<nst; j++)
-                freeSurvTable(&sts[i][j]);
-            free(sts[i]);
-        }
-        free(sts);
-    }
+    freeSurvTable(&settings, sts);
 
     if (NULL != settings.cif_dirs) free(settings.cif_dirs);
 
