@@ -24,10 +24,12 @@ typedef struct {
     char *region_magic;
     int coord_shift;
     int coord_factor;
-    int region_size;
     int ntiles;
 	int *tileArray;
+	int region_size;
     int nregions;
+    int nregions_x;
+    int nregions_y;
     int nreads;
     int readLength[N_READS];
     char *cmdLine;
@@ -57,5 +59,7 @@ void addHeaderComment(Header *hdr, char *comment);
 void readHeader(FILE *fp, Header *hdr);
 void readFilterData(FILE *fp, Header *hdr);
 char getFilterData(int tile, int read, int cycle, int region);
+
+int xy2region(int x, int y, int nregions_x, int nregions_y);
 
 #endif /* DIE_H_INCLUDED */

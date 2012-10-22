@@ -51,7 +51,7 @@ initialise ()
             --bustard) bustard=1; echo "will read bustard files" >&2; shift 1 ;;
             --gerald) gerald=1; echo "will read gerald files" >&2; shift 1 ;;
             --harold) harold=1; echo "will read harold files" >&2; shift 1 ;;
-			--spatial_filter) spatial_filter=1; echo"will apply spatial_filter" >&2; shift 1 ;;
+			--spatial_filter) spatial_filter=1; echo "will apply spatial_filter" >&2; shift 1 ;;
             --runfolder_dir) runfolder_dir=$2; echo "runfolder_dir $runfolder_dir" >&2; shift 2 ;;
             --bustard_dir) bustard_dir=$2; echo "bustard_dir $bustard_dir" >&2; shift 2 ;;
             --run) run=$2; echo "run $run" >&2; shift 2 ;;
@@ -503,6 +503,20 @@ fi
 # Added 8 Oct 2012 by js10
 #
 if [ $spatial_filter ] ; then
+    if [ -z $runfolder_dir ] ; then
+        # use NPG to lookup the runfolder given the run
+        runfolder_dir=`perl -le 'use srpipe::runfolder; print srpipe::runfolder->new(id_run=>$ARGV[0])->runfolder_path' $run`
+        if [ -z $runfolder_dir ] ; then
+            echo "No runfolder for run $run" >&2
+            exit 1
+        fi
+    fi
+    if [ ! -d $runfolder_dir ] ; then
+        echo "Runfolder directory $runfolder_dir does not exist" >&2
+        exit 1
+    fi
+    echo runfolder directory $runfolder_dir >&2
+
 	spatial_filter -c -f -q -i $runfolder_dir/Data/Intensities --filter ${output}.filter $output
 	if [ ! -s ${output}.filter ] ; then
 		echo "spatial_filter failed to create a filter file ${output}.filter" >&2
