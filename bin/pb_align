@@ -36,8 +36,9 @@ initialise ()
     aln_parms=""
     bowtie=""
     bowtie_parms="-l 32 -n 2 -e 2000 --best -S -X 3000"
+	spatial_filter=""
 
-    TEMP=`getopt -a -o h --long bam:,rta,bustard,gerald,harold,runfolder_dir:,bustard_dir:,run:,lane:,read:,read1:,read2:,tiles:,random:,seed:,pf_filter,n_filter:,ref:,aln_parms:,bowtie,bowtie_parms:,prefix:,help -n $0 -- "$@"`
+    TEMP=`getopt -a -o h --long bam:,rta,bustard,gerald,harold,spatial_filter,runfolder_dir:,bustard_dir:,run:,lane:,read:,read1:,read2:,tiles:,random:,seed:,pf_filter,n_filter:,ref:,aln_parms:,bowtie,bowtie_parms:,prefix:,help -n $0 -- "$@"`
 
     if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
 
@@ -50,6 +51,7 @@ initialise ()
             --bustard) bustard=1; echo "will read bustard files" >&2; shift 1 ;;
             --gerald) gerald=1; echo "will read gerald files" >&2; shift 1 ;;
             --harold) harold=1; echo "will read harold files" >&2; shift 1 ;;
+			--spatial_filter) spatial_filter=1; echo "will apply spatial_filter" >&2; shift 1 ;;
             --runfolder_dir) runfolder_dir=$2; echo "runfolder_dir $runfolder_dir" >&2; shift 2 ;;
             --bustard_dir) bustard_dir=$2; echo "bustard_dir $bustard_dir" >&2; shift 2 ;;
             --run) run=$2; echo "run $run" >&2; shift 2 ;;
@@ -101,6 +103,7 @@ initialise ()
                        echo "                             default do not purity filter reads";
                        echo "       -n_filter <count>   filter read with count N's";
                        echo "                             default do not N filter reads";
+                       echo "       -spatial_filter     apply spatial filtering to the bam files";
                        echo "                   ";
                        echo "                   ";
                        echo "       -ref <ref>          full path to reference";
@@ -494,3 +497,37 @@ if [ ! -s $stat_file ] ; then
   echo "failed to create flagstat file" >&2
   exit 1
 fi
+
+#
+# Spatial Filter options
+# Added 8 Oct 2012 by js10
+#
+if [ $spatial_filter ] ; then
+    if [ -z $runfolder_dir ] ; then
+        # use NPG to lookup the runfolder given the run
+        runfolder_dir=`perl -le 'use srpipe::runfolder; print srpipe::runfolder->new(id_run=>$ARGV[0])->runfolder_path' $run`
+        if [ -z $runfolder_dir ] ; then
+            echo "No runfolder for run $run" >&2
+            exit 1
+        fi
+    fi
+    if [ ! -d $runfolder_dir ] ; then
+        echo "Runfolder directory $runfolder_dir does not exist" >&2
+        exit 1
+    fi
+    echo runfolder directory $runfolder_dir >&2
+
+	spatial_filter -c -f -q -i $runfolder_dir/Data/Intensities --filter ${output}.filter $output
+	if [ ! -s ${output}.filter ] ; then
+		echo "spatial_filter failed to create a filter file ${output}.filter" >&2
+		exit 1
+	fi
+	spatial_filter -a -f -q -i $runfolder_dir/Data/Intensities --filter ${output}.filter -o {$output}.filtered $output
+	if [ ! -s ${output}.filtered ] ; then
+		echo "spatial_filter failed to apply filter and produce ${output}.filtered" >&2
+		exit 1
+	fi
+	mv $output ${output}.original
+	mv ${output}.filtered $output
+fi
+

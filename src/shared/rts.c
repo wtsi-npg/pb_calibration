@@ -85,6 +85,8 @@ void readHeader(FILE *fp, Header *hdr)
 		fgets(line, len, fp); hdr->tileArray[i] = atoi(line);
 	}
     fgets(line, len, fp); hdr->nregions = atoi(line);
+    fgets(line, len, fp); hdr->nregions_x = atoi(line);
+    fgets(line, len, fp); hdr->nregions_y = atoi(line);
     fgets(line, len, fp); hdr->nreads = atoi(line);
     for (i=0; i < hdr->nreads; i++) {
         fgets(line, len, fp); hdr->readLength[i] = atoi(line);
@@ -108,6 +110,8 @@ void writeHeader(FILE *fp, Header *hdr)
 		fprintf(fp, "%d\n", hdr->tileArray[i]);
 	}
     fprintf(fp, "%d\n", hdr->nregions);
+    fprintf(fp, "%d\n", hdr->nregions_x);
+    fprintf(fp, "%d\n", hdr->nregions_y);
     fprintf(fp, "%d\n", hdr->nreads);
     for (i=0; i<hdr->nreads; i++)
         fprintf(fp, "%d\n", hdr->readLength[i]);
@@ -153,6 +157,16 @@ char getFilterData(int tile, int read, int cycle, int region)
 	itile = ((int*)pitile - _hdr->tileArray);
 	return filterData[ (itile * totalCycleLength * _hdr->nregions) + ((cycleLength + cycle) * _hdr->nregions) + region];
 }
+
+// which region is (x,y) in?
+int xy2region(int x, int y, int nregions_x, int nregions_y)
+{
+    int nregions = nregions_x * nregions_y;
+    float x_coord = (float)(x - COORD_SHIFT) / (float)COORD_FACTOR;
+    float y_coord = (float)(y - COORD_SHIFT) / (float)COORD_FACTOR;
+    return (int)(x_coord / nregions) * nregions_y + (int)(y_coord / nregions);
+}
+
 
 #ifdef TEST
 int main(int argc, char *argv[]) 
