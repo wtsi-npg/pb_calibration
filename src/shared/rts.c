@@ -9,7 +9,7 @@
 #include <rts.h>
 
 static RegionTable *rts[N_READS] = {NULL, NULL, NULL};
-static Header *_hdr;
+static Header *_hdr = NULL;
 static int n_tiles = 0;
 static int n_regions = 0;
 static int n_cycles[N_READS] = {0, 0, 0};
@@ -161,9 +161,11 @@ char getFilterData(int tile, int read, int cycle, int region)
 // which region is (x,y) in?
 int xy2region(int x, int y, int nregions_x, int nregions_y)
 {
+	int coord_shift = (_hdr ? _hdr->coord_shift : COORD_SHIFT);
+	int coord_factor = (_hdr ? _hdr->coord_factor : COORD_FACTOR);
     int nregions = nregions_x * nregions_y;
-    float x_coord = (float)(x - COORD_SHIFT) / (float)COORD_FACTOR;
-    float y_coord = (float)(y - COORD_SHIFT) / (float)COORD_FACTOR;
+    float x_coord = (float)(x - coord_shift) / (float)coord_factor;
+    float y_coord = (float)(y - coord_shift) / (float)coord_factor;
     return (int)(x_coord / nregions) * nregions_y + (int)(y_coord / nregions);
 }
 
