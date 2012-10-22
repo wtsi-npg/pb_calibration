@@ -100,10 +100,6 @@
 
 #include "version.h"
 
-#define PBP_VERSION PACKAGE_VERSION
-
-const char *pbs_c_rev = "$Revision$";
-
 #define BASE_ALIGN      (1<<0)
 #define BASE_MISMATCH   (1<<1)
 #define BASE_INSERTION  (1<<2)
@@ -141,6 +137,7 @@ typedef struct {
 	int qcfail;
 	int tileViz;
 	int quiet;
+	int region_size;
 	int nregions_x;
 	int nregions_y;
 	int nregions;
@@ -157,15 +154,9 @@ static void checked_chdir(const char *dir)
 
 }
 
-int xy2region(Settings *s, int x, int y)
-{
-	float x_coord = (float)(x - COORD_SHIFT) / (float)COORD_FACTOR;
-	float y_coord = (float)(y - COORD_SHIFT) / (float)COORD_FACTOR;
-	return (int)(x_coord / REGION_SIZE) * s->nregions_y + (int)(y_coord / REGION_SIZE);
-}
-
 static void setRegions(Settings * s)
 {
+	// if an intensity directory is given, use that to find the image size
 	if (s->intensity_dir) {
                 char *file = NULL;
                 size_t file_sz = strlen(s->intensity_dir) + 30;
@@ -187,8 +178,8 @@ static void setRegions(Settings * s)
 	        free(file);
 	}
 
-	s->nregions_x = 1 + (int)(s->width / REGION_SIZE);
-	s->nregions_y = 1 + (int)(s->height / REGION_SIZE);
+	s->nregions_x = 1 + (int)(s->width / s->region_size);
+	s->nregions_y = 1 + (int)(s->height / s->region_size);
 
 	s->nregions = s->nregions_x * s->nregions_y;
 
@@ -339,11 +330,8 @@ static void findBadRegions(Settings *s, int ntiles)
 
 	HashIter *iter = HashTableIterCreate();
 	while ((hashItem = HashTableIterNext(s->tile_hash, iter))) {
-//	for (itile = 0; itile < ntiles; itile++) {
 		int tile = *(int*)(hashItem->key);
 		int itile = hashItem->data.i;
-display("Hash Table: %d\t%d\n",tile,itile);
-//		int tile = tileArray[itile], read, cycle, iregion;
 
 		if (s->tileViz) displayTileViz(s,ntiles,tile);
 
@@ -437,17 +425,17 @@ void printFilter(Settings *s, int ntiles, FILE *fp)
 	hdr.region_magic = strdup(REGION_MAGIC);
 	hdr.coord_shift = COORD_SHIFT; 
 	hdr.coord_factor = COORD_FACTOR;
-	hdr.region_size = REGION_SIZE;
 	hdr.ntiles = ntiles;
 	hdr.tileArray = tileArray;
 	hdr.nreads = N_READS;
+	hdr.region_size = s->region_size;
 	hdr.nregions = s->nregions;
+	hdr.nregions_x = s->nregions_x;
+	hdr.nregions_y = s->nregions_y;
 	for (read=0; read < hdr.nreads; read++)
 		hdr.readLength[read] = s->read_length[read];
 	hdr.cmdLine = strdup(s->cmdline);
 	hdr.ncomments = 0;
-	addHeaderComment(&hdr, "Hello world");
-	addHeaderComment(&hdr, "@PG: This is a proper comment");
 	writeHeader(fp,&hdr);
 #endif
         
@@ -457,7 +445,6 @@ void printFilter(Settings *s, int ntiles, FILE *fp)
 		int tile = *(int*)(hashItem->key);
 #endif
 		int itile = hashItem->data.i;
-//	for (itile = 0; itile < ntiles; itile++) {
 		for (read = 0; read < N_READS; read++) {
 			for (cycle = 0; cycle < s->read_length[read]; cycle++) {
 				for (iregion = 0; iregion < s->nregions; iregion++) {
@@ -1159,22 +1146,18 @@ static void bam_header_add_pg(Settings *s, bam_header_t *bam_header, char *cl)
 		hl = endl + 1;
 	}
 
-	pgsize =
-	    128 + strlen(pn) + strlen(pn) + strlen(ds) + strlen(PBP_VERSION) +
-	    strlen(s->cmdline);
+	pgsize = 128 + strlen(pn) + strlen(pn) + strlen(ds) + strlen(version) + strlen(cl);
 	if (NULL != pp) {
 		pgsize += strlen(pp);
 		pg = smalloc(pgsize);
 		pglen =
 		    snprintf(pg, pgsize,
-			     "@PG\tID:%s\tPN:%s\tPP:%s\tDS:%s\tVN:" PBP_VERSION
-			     "\tCL:%s\n", id, pn, pp, ds, cl);
+			     "@PG\tID:%s\tPN:%s\tPP:%s\tDS:%s\tVN:%s\tCL:%s\n", id, pn, pp, ds, version, cl);
 	} else {
 		pg = smalloc(pgsize);
 		pglen =
 		    snprintf(pg, pgsize,
-			     "@PG\tID:%s\tPN:%s\tDS:%s\tVN:" PBP_VERSION
-			     "\tCL:%s\n", pn, pn, ds, cl);
+			     "@PG\tID:%s\tPN:%s\tDS:%s\tVN:%s\tCL:%s\n", pn, pn, ds, version, cl);
 	}
 	assert(pglen < pgsize);
 
@@ -1187,7 +1170,7 @@ static void bam_header_add_pg(Settings *s, bam_header_t *bam_header, char *cl)
 static int updateRegionTable(Settings *s, int itile, int read, int x, int y, int *read_mismatch)
 {
 
-	int iregion = xy2region(s, x, y);
+	int iregion = xy2region(x, y, s->nregions_x, s->nregions_y);
 	int cycle;
 
         /* update region table */
@@ -1353,7 +1336,7 @@ int filter_bam(Settings * s, samfile_t * fp_in_bam, samfile_t * fp_out_bam,
 		nreads_bam++;
 
 		char state = 0, bad_cycle_count = 0;
-		int iregion = xy2region(s, bam_x, bam_y);
+		int iregion = xy2region(bam_x, bam_y, s->nregions_x, s->nregions_y);
 		int read;
 		for (read = 0; read < N_READS; read++) {
 			int cycle;
@@ -1411,7 +1394,7 @@ static void usage(int code)
 {
 	FILE *usagefp = stderr;
 
-	fprintf(usagefp, "spatial_filter v" PBP_VERSION "\n\n");
+	fprintf(usagefp, "spatial_filter v%s\n\n", version);
 	fprintf(usagefp,
 		"Usage: spatial_filter [command] [options] bam_file\n"
 		"" "  calculate or apply a spatial filter\n" "");
@@ -1547,8 +1530,8 @@ void applyFilter(Settings *s)
 	}
 
 	out_bam_header = bam_header_dup(fp_input_bam->header);
-	bam_header_add_pg(s, out_bam_header, s->cmdline);
 	bam_header_add_pg(s, out_bam_header, hdr.cmdLine);
+	bam_header_add_pg(s, out_bam_header, s->cmdline);
 
 	out_bam_file = (NULL == s->output ? aprintf("/dev/stdout") : aprintf("%s/%s", s->working_dir, s->output));
 	fp_output_bam = samopen(out_bam_file, out_mode, out_bam_header);
@@ -1636,6 +1619,7 @@ int main(int argc, char **argv)
 	Settings settings;
 	const char *override_intensity_dir = NULL;
 	int dumpFilter = 0;
+	char *cmd = NULL;
 
 	settings.filter = "/dev/stdout";
 	settings.tileViz = 0;
@@ -1656,11 +1640,11 @@ int main(int argc, char **argv)
 	settings.working_dir = NULL;
 	settings.nregions_x = 0;
 	settings.nregions_y = 0;
+	settings.region_size = REGION_SIZE;
 	settings.nregions = 0;
 	settings.compress = 1;
 	settings.width = 0;
 	settings.height = 0;
-	settings.cmdline = get_command_line(argc, argv);
 
 	static struct option long_options[] = {
                    {"intensity_dir", 1, 0, 'i'},
@@ -1673,11 +1657,13 @@ int main(int argc, char **argv)
                    {"width", 1, 0, 'x'},
                    {"height", 1, 0, 'y'},
                    {"version", 0, 0, 'v'},
+                   {"region-size", 1, 0, 'r'},
+                   {"region_size", 1, 0, 'r'},
                    {0, 0, 0, 0}
                };
 
 	char c;
-	while ( (c = getopt_long(argc, argv, "vdcafuDF:o:i:p:s:x:y:t:qh?", long_options, 0)) != -1) {
+	while ( (c = getopt_long(argc, argv, "vdcafuDF:o:i:p:s:r:x:y:t:qh?", long_options, 0)) != -1) {
 		switch (c) {
 			case 'v':	display("spatial_filter: Version %s\n", version); 
 						exit(0);
@@ -1694,6 +1680,7 @@ int main(int argc, char **argv)
 			case 'F':	settings.filter = optarg;	break;
 			case 'x':	settings.width = atoi(optarg);	break;
 			case 'y':	settings.height = atoi(optarg);	break;
+			case 'r':	settings.region_size = atoi(optarg); break;
 			case 'q':	settings.quiet = 1;			break;
 			case 'h':
 			case '?':	usage(0);					break;
@@ -1705,7 +1692,33 @@ int main(int argc, char **argv)
 
 	if (optind < argc) settings.in_bam_file = argv[optind];
 
+	// create pseudo command line
+	if (settings.calculate || settings.apply) {
+		char num[32];
+		cmd = smalloc(2048);
+		strcat(cmd, argv[0]);
+		if (settings.calculate)     { strcat(cmd, " -c "); }
+		if (settings.apply)         { strcat(cmd, " -a "); }
+		if (settings.qcfail)        { strcat(cmd, " -f "); }
+		if (settings.compress)      { strcat(cmd, " -u "); }
+		if (settings.output)        { strcat(cmd, " -o "); strcat(cmd, settings.output); }
+		if (override_intensity_dir) { strcat(cmd, " -i "); strcat(cmd, override_intensity_dir); }
+		if (settings.snp_file)      { strcat(cmd, " -s "); strcat(cmd, settings.snp_file); }
+		if (settings.filter)        { strcat(cmd, " -F "); strcat(cmd, settings.filter); }
+		if (settings.width)         { strcat(cmd, " -x "); sprintf(num,"%d",settings.width);       strcat(cmd, num); }
+		if (settings.height)        { strcat(cmd, " -y "); sprintf(num,"%d",settings.height);      strcat(cmd, num); }
+		if (settings.region_size)   { strcat(cmd, " -r "); sprintf(num,"%d",settings.region_size); strcat(cmd, num); }
+		strcat(cmd, " ");
+		strcat(cmd, settings.in_bam_file);
+		if (strlen(cmd) > 2047) die("Command line too big");
+	}
+
+	if (!settings.quiet) display("Cmd: %s\n", cmd);
+	settings.cmdline = cmd;
+
 	if (!settings.in_bam_file && !dumpFilter) die("No BAM file specified\n");
+
+	if (!settings.region_size) die("Invalid region size");
 
 	/* preserve starting directory */
 	settings.working_dir = getcwd(NULL,0);
@@ -1741,9 +1754,6 @@ int main(int argc, char **argv)
 
 	/* set the number of regions by reading the intensity file */
 	setRegions(&settings);
-	if (0 == settings.nregions) {
-		die("ERROR: invalid tile size\n");
-	}
 
 	/* calculate the filter */
 	if (settings.calculate) calculateFilter(&settings);
