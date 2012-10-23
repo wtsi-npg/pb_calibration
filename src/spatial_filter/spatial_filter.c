@@ -109,13 +109,12 @@
 
 #define PHRED_QUAL_OFFSET  33    // phred quality values offset
 
-#define REGION_MIN_COUNT            10      // minimum coverage when setting region state
-#define REGION_MISMATCH_THRESHOLD   20.0    // threshold for setting region mismatch state
-#define REGION_INSERTION_THRESHOLD  20.0    // threshold for setting region insertion state
-#define REGION_DELETION_THRESHOLD   20.0    // threshold for setting region deletion state
-#define REGION_SOFT_CLIP_THRESHOLD  50.0    // threshold for setting region soft_clip state
+#define REGION_MIN_COUNT            10	// minimum coverage when setting region state
+#define REGION_MISMATCH_THRESHOLD   20	// threshold for setting region mismatch state
+#define REGION_INSERTION_THRESHOLD  20	// threshold for setting region insertion state
+#define REGION_DELETION_THRESHOLD   20	// threshold for setting region deletion state
 
-#define TILE_REGION_THRESHOLD  75.0    // threshold for setting region state at tile level
+#define TILE_REGION_THRESHOLD  75.0		// threshold for setting region state at tile level
 
 #define REGION_STATE_MASK  (REGION_STATE_INSERTION | REGION_STATE_DELETION)    // region mask used to filter reads
 
@@ -144,6 +143,10 @@ typedef struct {
 	int compress;
 	int width;
 	int height;
+	int region_min_count;
+	int region_mismatch_threshold;
+	int region_insertion_threshold;
+	int region_deletion_threshold;
 } Settings;
 
 static char *complement_table = NULL;
@@ -267,7 +270,7 @@ static void displayTileViz(Settings *s, int ntiles, int tile)
                         RegionTable *rt = getRTS(itile,iregion,read,cycle);
                         int n = rt->align + rt->insertion + rt->deletion + rt->soft_clip + rt->known_snp;
                         // correct for sparse bins by assuming ALL bins have atleast REGION_MIN_COUNT clusters
- 	                n = max(n, REGION_MIN_COUNT);
+ 	                n = max(n, s->region_min_count);
                         // coverage should be the same for all cycles
                         coverage[iregion] = n;
                         // for all other values take the maximum over all cycles
@@ -349,20 +352,17 @@ static void findBadRegions(Settings *s, int ntiles)
 					int n = rt->align + rt->insertion + rt->deletion + rt->soft_clip + rt->known_snp;
 
 					// coverage - mark spare bins
-					if (n < REGION_MIN_COUNT) rt->state |= REGION_STATE_COVERAGE;
+					if (n < s->region_min_count) rt->state |= REGION_STATE_COVERAGE;
 
 					// correct for sparse bins by assuming ALL bins have atleast REGION_MIN_COUNT clusters
-					n = max(n, REGION_MIN_COUNT);
+					n = max(n, s->region_min_count);
 
 					// mismatch - mark bins with maximum mismatch rate > threshold
-					if ((100.0 * rt->mismatch / n)  >= REGION_MISMATCH_THRESHOLD)  rt->state |= REGION_STATE_MISMATCH;
+					if ((100.0 * rt->mismatch / n)  >= s->region_mismatch_threshold)  rt->state |= REGION_STATE_MISMATCH;
 					// insertion - mark bins with maximum insertion rate > threshold
-					if ((100.0 * rt->insertion / n) >= REGION_INSERTION_THRESHOLD) rt->state |= REGION_STATE_INSERTION;
+					if ((100.0 * rt->insertion / n) >= s->region_insertion_threshold) rt->state |= REGION_STATE_INSERTION;
 					// deletion - mark bins with maximum deletion rate > threshold
-					if ((100.0 * rt->deletion / n)  >= REGION_DELETION_THRESHOLD)  rt->state |= REGION_STATE_DELETION;
-					// soft_clip - mark bins with maximum soft_clip rate > threshold
-					if ((100.0 * rt->soft_clip / n) >= REGION_SOFT_CLIP_THRESHOLD) rt->state |= REGION_STATE_SOFT_CLIP;
-
+					if ((100.0 * rt->deletion / n)  >= s->region_deletion_threshold)  rt->state |= REGION_STATE_DELETION;
 					//if (rt->state) display("%d:%d:%d:%d:%d:%d\t%02x\n", s->lane, tileArray[itile], iregion, read, cycle, n, rt->state);
 				}
 				// ignoring low coverage, if all regions with a non-zero state have the same state and the
@@ -1426,6 +1426,20 @@ static void usage(int code)
 	fprintf(usagefp, "               generate tileviz like summary plots for read number\n");
 	fprintf(usagefp, "    -q         Quiet\n");
 	fprintf(usagefp, "               Inhibit all progress messages\n");
+	fprintf(usagefp, "    --region_size\n");
+	fprintf(usagefp, "               default %d\n", REGION_SIZE);
+	fprintf(usagefp, "    --region_min_count\n");
+	fprintf(usagefp, "               minimum coverage when setting region state\n");
+	fprintf(usagefp, "               default %d\n", REGION_MIN_COUNT);
+	fprintf(usagefp, "    --region_mismatch_threshold\n");
+	fprintf(usagefp, "               threshold for setting region mismatch state\n");
+	fprintf(usagefp, "               default %d\n", REGION_MISMATCH_THRESHOLD);
+	fprintf(usagefp, "    --region_insertion_threshold\n");
+	fprintf(usagefp, "               threshold for setting region insertion state\n");
+	fprintf(usagefp, "               default %d\n", REGION_INSERTION_THRESHOLD);
+	fprintf(usagefp, "    --region_deletion_threshold\n");
+	fprintf(usagefp, "               threshold for setting region deletion state\n");
+	fprintf(usagefp, "               default %d\n", REGION_DELETION_THRESHOLD);
 	fprintf(usagefp, "\n");
 
 	exit(code);
@@ -1520,6 +1534,9 @@ void applyFilter(Settings *s)
 	readHeader(fp, &hdr);
 	readFilterData(fp, &hdr);
 	fclose(fp);
+
+	s->nregion_x = hdr->nregion_x;
+	s->nregion_y = hdr->nregion_y;
 
 	if (0 == s->compress)
 		strcat(out_mode, "u");
@@ -1645,6 +1662,10 @@ int main(int argc, char **argv)
 	settings.compress = 1;
 	settings.width = 0;
 	settings.height = 0;
+	settings.region_min_count = REGION_MIN_COUNT;
+	settings.region_mismatch_threshold = REGION_MISMATCH_THRESHOLD;
+	settings.region_insertion_threshold = REGION_INSERTION_THRESHOLD;
+	settings.region_deletion_threshold = REGION_DELETION_THRESHOLD;
 
 	static struct option long_options[] = {
                    {"intensity_dir", 1, 0, 'i'},
@@ -1659,11 +1680,15 @@ int main(int argc, char **argv)
                    {"version", 0, 0, 'v'},
                    {"region-size", 1, 0, 'r'},
                    {"region_size", 1, 0, 'r'},
+                   {"region_min_count", 1, 0, 'm'},
+                   {"region_mismatch_threshold", 1, 0, 'z'},
+                   {"region_insertion_threshold", 1, 0, 'b'},
+                   {"region_deletion_threshold", 1, 0, 'e'},
                    {0, 0, 0, 0}
                };
 
 	char c;
-	while ( (c = getopt_long(argc, argv, "vdcafuDF:o:i:p:s:r:x:y:t:qh?", long_options, 0)) != -1) {
+	while ( (c = getopt_long(argc, argv, "vdcafuDF:b:e:o:i:m:p:s:r:x:y:t:z:qh?", long_options, 0)) != -1) {
 		switch (c) {
 			case 'v':	display("spatial_filter: Version %s\n", version); 
 						exit(0);
@@ -1681,6 +1706,10 @@ int main(int argc, char **argv)
 			case 'x':	settings.width = atoi(optarg);	break;
 			case 'y':	settings.height = atoi(optarg);	break;
 			case 'r':	settings.region_size = atoi(optarg); break;
+			case 'm':	settings.region_min_count = atoi(optarg); break;
+			case 'z':	settings.region_mismatch_threshold = atoi(optarg); break;
+			case 'b':	settings.region_insertion_threshold = atoi(optarg); break;
+			case 'e':	settings.region_deletion_threshold = atoi(optarg); break;
 			case 'q':	settings.quiet = 1;			break;
 			case 'h':
 			case '?':	usage(0);					break;
