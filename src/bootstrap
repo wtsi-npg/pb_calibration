@@ -1,4 +1,4 @@
-rm -rf install-sh missing depcomp aclocal.m4 config.cache config.log config.status configure autom4te.cache pb_config.h.in config.sub config.guess Makefile Makefile.in calibration_pu/Makefile.in calibration_pu/Makefile predictor_pu/Makefile.in predictor_pu/Makefile spatial_filter/Makefile.in spatial_filter/Makefile shared/Makefile shared/Makefile.in man/Makefile man/Makefile.in tests/Makefile tests/Makefile.in
+rm -rf install-sh missing depcomp aclocal.m4 config.cache config.log config.status configure autom4te.cache pb_config.h.in config.sub config.guess Makefile Makefile.in calibration_pu/Makefile.in calibration_pu/Makefile predictor_pu/Makefile.in predictor_pu/Makefile spatial_filter/Makefile.in spatial_filter/Makefile shared/Makefile shared/Makefile.in 
 
 # make aclocal.m4 from .m4 files in ac_stubs directory
 aclocal -I ac_stubs
