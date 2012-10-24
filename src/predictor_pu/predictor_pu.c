@@ -40,42 +40,11 @@
  */
 
 /*
- * Parts of this code have been edited by Illumina.  These edits have been
- * made available under the following license:
- *
- * Copyright (c) 2008-2009, Illumina Inc.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *
- *     * Redistributions in binary form must reproduce the above
- *       copyright notice, this list of conditions and the following
- *       disclaimer in the documentation and/or other materials
- *       provided with the distribution.
- *
- *     * Neither the name of the Illumina Inc. nor the
- *       names of its contributors may be used to endorse or promote
- *       products derived from this software without specific prior
- *       written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY ILLUMINA ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL ILLUMINA BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Parts of this code were inherited from sequenceread, see
+ * http://sequenceread.svn.sourceforge.net/viewvc/sequenceread, which
+ * contained code edited by Illumina. As no illumina code is used here
+ * the Illumina copyright notice has been removed
  */
-
 
 /*
  * Author: Steven Leonard, Jan 2009
@@ -120,16 +89,12 @@
 #include <die.h>
 #include <rts.h>
 
-#define PBP_VERSION PACKAGE_VERSION
-
-const char * pbs_c_rev = "$Revision$";
+#include <version.h>
 
 #define MAX_CIF_CHUNK_BYTES 4194304
 
 /* if we split data by state, using a filter file rather than tile, use tile as a place holder for state */
 #define N_STATES 2
-
-#define N_CTS N_TILES*N_READS*N_CYCLES  // Assumes N_TILES > N_STATES
 
 #define PHRED_QUAL_OFFSET 33  // phred quality values offset
 #define ILL_QUAL_OFFSET   64  // illumina quality values offset
@@ -162,19 +127,18 @@ typedef struct {
     char *cmdline;
     char *intensity_dir;
     char *output;
+    int read_length[3];
+    int cstart[3];
+    int quiet;
+    int spatial_filter;
+    int region_size;
+    int nregions_x;
+    int nregions_y;
     char *working_dir;
     CifDir *cif_dirs;
     size_t  n_cif_dirs;
     size_t *cif_lane_index;
     size_t  n_cif_lanes;
-    int read_length[3];
-    int cstart[3];
-    int quiet;
-    int width;
-    int height;
-    int nregions;
-    int nregions_x;
-    int nregions_y;
 } Settings;
 
 typedef union {
@@ -211,46 +175,6 @@ checked_chdir(const char* dir){
         fprintf(stderr,"ERROR: failed to change directory to: %s\n",dir);
         exit(EXIT_FAILURE);
     }
-}
-
-int xy2region(Settings *s, int x, int y)
-{
-	float x_coord = (float)(x - COORD_SHIFT) / (float)COORD_FACTOR;
-	float y_coord = (float)(y - COORD_SHIFT) / (float)COORD_FACTOR;
-	return (int)(x_coord / REGION_SIZE) * s->nregions_y + (int)(y_coord / REGION_SIZE);
-}
-
-static void setRegions(Settings * s)
-{
-	if (s->intensity_dir) {
-                char *file = NULL;
-		size_t file_sz = strlen(s->intensity_dir) + 30;
-                int fd = -1;
-                ssize_t res;
-                uint32_t width, height;
-		file = smalloc(file_sz);
-		snprintf(file, file_sz, "%s/../ImageSize.dat", s->intensity_dir);
-		fd = open(file, O_RDONLY);
-		if (fd < 0) die("Couldn't open %s : %s\n", file, strerror(errno));
-		res = read(fd, &width, 4);
-		if (4 != res) die("Error reading %s\n", file);
-		res = read(fd, &height, 4);
-		if (4 != res) die("Error reading %s\n", file);
-		s->width = width;
-		s->height = height;
-  	        if (!s->quiet) display("Read tile width=%u height=%u from file %s\n", s->width, s->height, file);
-		close(fd);
-   	        free(file);
-	}
-
-	s->nregions_x = 1 + (int)(s->width / REGION_SIZE);
-	s->nregions_y = 1 + (int)(s->height / REGION_SIZE);
-
-	s->nregions = s->nregions_x * s->nregions_y;
-
-	if (!s->quiet) display("nregions_x=%d nregions_y=%d nregions=%d\n", s->nregions_x, s->nregions_y, s->nregions);
-
-	return;
 }
 
 static void initialiseCalTable(CalTable *ct, int tile, int read, int cycle)
@@ -293,12 +217,11 @@ static void freeCalTable(CalTable *ct)
         free(ct->error_rate);
         free(ct->quality);
         free(ct->ibin);
-
-        ct->nbins = 0;
     }
+    free(ct);
 }
 
-static int restoreCalTable(Settings *s, const char* calibrationFile, HashTable *ct_hash, CalTable *cts)
+static int restoreCalTable(Settings *s, const char* calibrationFile, HashTable *ct_hash)
 {
     int nct = 0;
     static const int line_size = 1028;
@@ -336,13 +259,13 @@ static int restoreCalTable(Settings *s, const char* calibrationFile, HashTable *
             exit(EXIT_FAILURE);
         }
 
-        if( cycle < 0 || cycle >= N_CYCLES ){
-            fprintf(stderr,"ERROR: Invalid cycle in CT file (%s) %d < 0 or > %d.\n",
-                    calibrationFile, cycle, N_CYCLES);
+        if( cycle < 0 ){
+            fprintf(stderr,"ERROR: Invalid cycle in CT file (%s) %d < 0.\n",
+                    calibrationFile, cycle);
             exit(EXIT_FAILURE);
         }
 
-        if( s->nregions ){
+        if( s->spatial_filter ){
             if( tile < 0 || tile >= N_STATES ){
                 fprintf(stderr,"ERROR: Invalid state in CT file (%s) %d < 0 or > %d.\n",
                         calibrationFile, tile, N_STATES);
@@ -352,32 +275,26 @@ static int restoreCalTable(Settings *s, const char* calibrationFile, HashTable *
     
         snprintf(key, sizeof(key), "%d:%d:%d", tile, read, cycle);
         if( NULL == (hi = HashTableSearch(ct_hash, key, strlen(key))) ){
-            if( nct == N_CTS ) {
-                fprintf(stderr,"ERROR: too many tile/state, read and cycle combinations in CT file (%s) %d > %d.\n",
-                        calibrationFile, nct, N_CTS);
-                exit(EXIT_FAILURE);
-            }
-
-            hd.i = nct;
+            hd.p = smalloc(sizeof(CalTable));
             if( NULL == HashTableAdd(ct_hash, key, strlen(key), hd, NULL) ) {
                 fprintf(stderr, "ERROR: building tile cycle hash table\n");
                 exit(EXIT_FAILURE);
             }
 
-            if( s->nregions ){
+            if( s->spatial_filter ){
                 if( tile == 1 ) fprintf(stderr, "bad region read=%d cycle=%3d\n", read, cycle);
             }else{
                 if( tile < 0 ) fprintf(stderr, "bad tile=%4d read=%d cycle=%3d\n", tile, read, cycle);
             }
             
             /* current ct is the new ct */
-            current_ct = cts + hd.i;
+            current_ct = (CalTable *)hd.p;
 
             initialiseCalTable(current_ct, tile, read, cycle);
 
             nct++;
         }else{
-            current_ct = cts + hi->data.i;
+            current_ct = (CalTable *)hi->data.p;
         }
 
         if( current_ct->nbins == 76 ){
@@ -758,14 +675,14 @@ static void bam_header_add_pg(Settings *s, bam_header_t *bam_header) {
         hl = endl + 1;
     }
     
-    pgsize = 128 + strlen(pn) + strlen(pn) + strlen(ds) + strlen(PBP_VERSION) + strlen(s->cmdline);
+    pgsize = 128 + strlen(pn) + strlen(pn) + strlen(ds) + strlen(version) + strlen(s->cmdline);
     if( NULL != pp ){
         pgsize += strlen(pp);
         pg = smalloc(pgsize);
-        pglen = snprintf(pg, pgsize, "@PG\tID:%s\tPN:%s\tPP:%s\tDS:%s\tVN:" PBP_VERSION "\tCL:%s\n", id, pn, pp, ds, s->cmdline);
+        pglen = snprintf(pg, pgsize, "@PG\tID:%s\tPN:%s\tPP:%s\tDS:%s\tVN:%s\tCL:%s\n", id, pn, pp, ds, version, s->cmdline);
     }else{
         pg = smalloc(pgsize);
-        pglen = snprintf(pg, pgsize, "@PG\tID:%s\tPN:%s\tDS:%s\tVN:" PBP_VERSION "\tCL:%s\n", pn, pn, ds, s->cmdline);
+        pglen = snprintf(pg, pgsize, "@PG\tID:%s\tPN:%s\tDS:%s\tVN:%s\tCL:%s\n", pn, pn, ds, version, s->cmdline);
     }
     assert(pglen < pgsize);
     
@@ -1136,7 +1053,7 @@ static void free_cif_data(CifData *cif_data) {
   Quits the program if the data in the files is inconsistent.
 */
 
-static int update_bam_qualities(Settings *s, HashTable *ct_hash, CalTable *cts, CifData *cif_data,
+static int update_bam_qualities(Settings *s, HashTable *ct_hash, CifData *cif_data,
                                 size_t spot_num, int tile, int x, int y, int read,
                                 samfile_t *fp_bam, bam1_t *bam) {
     int cstart = s->cstart[read];
@@ -1150,7 +1067,7 @@ static int update_bam_qualities(Settings *s, HashTable *ct_hash, CalTable *cts, 
 
     assert((cstart + read_length) <= cif_data->ncycles);
 
-    if (s->nregions) iregion = xy2region(s, x, y);
+    if (s->spatial_filter) iregion = xy2region(x, y, s->region_size, s->nregions_x, s->nregions_y);
 
     /* copy original qualities to OQ:Z tag, N.B. have to null terminate aux strings */
     qual = bam1_qual(bam);
@@ -1171,7 +1088,7 @@ static int update_bam_qualities(Settings *s, HashTable *ct_hash, CalTable *cts, 
         int value, ibin, quality;
 
         /* set cycle ct */
-        if (s->nregions) {
+        if (s->spatial_filter) {
             /* state/read/cycle ct */
             int state = (getFilterData(tile, read, b, iregion) & REGION_STATE_MISMATCH) ? 1 : 0;
             snprintf(key, sizeof(key), "%d:%d:%d", state, read, b);
@@ -1191,7 +1108,7 @@ static int update_bam_qualities(Settings *s, HashTable *ct_hash, CalTable *cts, 
                 }
             }
         }
-        ct = cts + hi->data.i;
+        ct = (CalTable *)hi->data.p;
 
         read_cif_chunk(s, cycle, spot_num);
         for (channel = 0; channel < cycle->num_channels; channel++) {
@@ -1252,10 +1169,10 @@ static int update_bam_qualities(Settings *s, HashTable *ct_hash, CalTable *cts, 
  * Returns: 0 written for success
  *	   -1 for failure
  */
-int recalibrate_bam(Settings *s, HashTable *ct_hash, CalTable *cts, samfile_t *fp_in_bam, samfile_t *fp_out_bam, size_t *nreads) {
+int recalibrate_bam(Settings *s, HashTable *ct_hash, samfile_t *fp_in_bam, samfile_t *fp_out_bam, size_t *nreads) {
     CifData *cif_data = NULL;
 
-    int tiles[N_TILES];
+    HashTable *tile_hash;
 
     int ncycles_firecrest = -1;
 
@@ -1264,6 +1181,9 @@ int recalibrate_bam(Settings *s, HashTable *ct_hash, CalTable *cts, samfile_t *f
 
     int ntiles_bam = 0;
     size_t nreads_bam = 0;
+
+    tile_hash = HashTableCreate(0, HASH_DYNAMIC_SIZE | HASH_FUNC_JENKINS3);
+    if (!tile_hash) die("Failed to create tile_hash\n");
 
     bam1_t *bam = bam_init1();
 
@@ -1304,8 +1224,6 @@ int recalibrate_bam(Settings *s, HashTable *ct_hash, CalTable *cts, samfile_t *f
         }
 
         if (bam_tile != tile) {
-            int itile;
-
             tile = bam_tile;
             
             if (!s->quiet) fprintf(stderr, "Processing tile %i (%lu)\n", tile, nreads_bam);
@@ -1330,22 +1248,20 @@ int recalibrate_bam(Settings *s, HashTable *ct_hash, CalTable *cts, samfile_t *f
                 exit(EXIT_FAILURE);
             }
 
-            for (itile=0; itile<ntiles_bam; itile++)
-                if (tile == tiles[itile]) {
-                    fprintf(stderr,"ERROR: alignments are not sorted by tile.\n");
-                    exit(EXIT_FAILURE);
-                }
-
-            ntiles_bam++;
-            if(ntiles_bam > N_TILES){
-                fprintf(stderr,"ERROR: too many tiles %d > %d.\n", ntiles_bam, N_TILES);
+            // lookup itile from tile in tile hash
+            HashItem *tileItem = HashTableSearch(tile_hash, (char *)&tile, sizeof(tile));
+            if (tileItem) {
+                fprintf(stderr,"ERROR: alignments are not sorted by tile.\n");
                 exit(EXIT_FAILURE);
+            } else {
+  	         HashData hd;
+                 hd.i = ntiles_bam++;
+                 if (HashTableAdd(tile_hash, (char *)&tile, sizeof(tile), hd, NULL) == NULL)
+                     die("Failed to add tile %d to tile_hash\n", bam_tile);
             }
-
-            tiles[itile] = tile;
         }
 
-        if (0 != update_bam_qualities(s, ct_hash, cts, cif_data,
+        if (0 != update_bam_qualities(s, ct_hash, cif_data,
                                       bam_offset, bam_tile, bam_x, bam_y, bam_read,
                                       fp_out_bam, bam)) {
             fprintf(stderr,"ERROR: updating quality values.\n");
@@ -1433,7 +1349,7 @@ static
 void usage(int code) {
     FILE* usagefp = stderr;
 
-    fprintf(usagefp, "pb_predictor v" PBP_VERSION "\n\n");
+    fprintf(usagefp, "pb_predictor v%s\n\n", version);
     fprintf(usagefp, 
             "Usage: pb_predictor [options] bam file\n"
             ""
@@ -1525,14 +1441,16 @@ int main(int argc, char **argv) {
     char *ct_filename = NULL;
     const char *override_intensity_dir = NULL;
     const char *filter_file = NULL;
-    Header filter_header;
     size_t nreads = 0;
     HashTable *ct_hash = NULL;
     int nct = 0;
-    CalTable *cts = NULL;
 
     settings.output = NULL;
     settings.quiet = 0;
+    settings.spatial_filter = 0;
+    settings.region_size = 0;
+    settings.nregions_x = 0;
+    settings.nregions_y = 0;
     settings.cstart[0] = 0;
     settings.cstart[1] = 0;
     settings.cstart[2] = 0;
@@ -1545,11 +1463,6 @@ int main(int argc, char **argv) {
     settings.n_cif_dirs     = 0;
     settings.cif_lane_index = NULL;
     settings.n_cif_lanes    = 0;
-    settings.width      = 0;
-    settings.height     = 0;
-    settings.nregions   = 0;
-    settings.nregions_x = 0;
-    settings.nregions_y = 0;
 
     settings.cmdline = get_command_line(argc, argv);
 
@@ -1655,24 +1568,22 @@ int main(int argc, char **argv) {
     if (NULL != filter_file) {
         FILE *fp = fopen(filter_file, "rb");
         if (!fp) die("Can't open filter file %s\n", filter_file);
+        Header filter_header;
         readHeader(fp, &filter_header);
         readFilterData(fp, &filter_header);
-
-        /* set the number of regions by reading the ImageSize.dat file */
-        setRegions(&settings);
-        if (0 == settings.nregions) {
-                die("ERROR: invalid tile size\n");
-        }
+        settings.spatial_filter = 1;
+        settings.region_size = filter_header.region_size;
+        settings.nregions_x = filter_header.nregions_x;
+        settings.nregions_y = filter_header.nregions_y;
     }
 
     if (NULL == (ct_hash = HashTableCreate(0, HASH_DYNAMIC_SIZE|HASH_FUNC_JENKINS3))) {
         fprintf(stderr, "ERROR: creating tile caltable hash\n");
         exit(EXIT_FAILURE);
     }
-    cts = smalloc(N_CTS * sizeof(CalTable));
 
     // read the callibration table
-    nct = restoreCalTable(&settings, ct_filename, ct_hash, cts);
+    nct = restoreCalTable(&settings, ct_filename, ct_hash);
 
     /* Look for CIF directories */
     get_cif_dirs(&settings);
@@ -1703,7 +1614,7 @@ int main(int argc, char **argv) {
 
     bam_header_destroy(out_bam_header);
 
-    if (-1 == recalibrate_bam(&settings, ct_hash, cts, fp_input_bam, fp_output_bam, &nreads)) {
+    if (-1 == recalibrate_bam(&settings, ct_hash, fp_input_bam, fp_output_bam, &nreads)) {
         fprintf(stderr,"ERROR: failed to process bam file %s\n", in_bam_file);
         exit(EXIT_FAILURE);
     }
@@ -1715,14 +1626,17 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Wrote %lu traces\n", nreads);
     }
 
-    if (NULL != cts) {
-        for (i=0; i<nct; i++)
-            freeCalTable(&cts[i]);
-        free(cts);
+    if (NULL != ct_hash) {
+	HashIter *tileIter = HashTableIterCreate();
+	HashItem *hashItem;
+	while ((hashItem = HashTableIterNext(ct_hash, tileIter)))
+            freeCalTable((CalTable *)hashItem->data.p);
     }
+
     if (NULL != settings.cif_dirs) free(settings.cif_dirs);
 
     if (NULL != settings.working_dir) free(settings.working_dir);
 
     return EXIT_SUCCESS;
+
 }
