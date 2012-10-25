@@ -34,11 +34,12 @@ initialise ()
     ref=""
     prefix=""
     aln_parms=""
+	sf_parms=""
     bowtie=""
     bowtie_parms="-l 32 -n 2 -e 2000 --best -S -X 3000"
 	spatial_filter=""
 
-    TEMP=`getopt -a -o h --long bam:,rta,bustard,gerald,harold,spatial_filter,runfolder_dir:,bustard_dir:,run:,lane:,read:,read1:,read2:,tiles:,random:,seed:,pf_filter,n_filter:,ref:,aln_parms:,bowtie,bowtie_parms:,prefix:,help -n $0 -- "$@"`
+    TEMP=`getopt -a -o h --long bam:,rta,bustard,gerald,harold,spatial_filter,runfolder_dir:,bustard_dir:,run:,lane:,read:,read1:,read2:,tiles:,random:,seed:,pf_filter,n_filter:,ref:,aln_parms:,sf_parms:,bowtie,bowtie_parms:,prefix:,help -n $0 -- "$@"`
 
     if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
 
@@ -66,6 +67,7 @@ initialise ()
             --n_filter) n_filter=$2; echo "will filter $n_filter N's" >&2; shift 2 ;;
             --ref) ref=$2; echo "reference $ref" >&2; shift 2 ;;
             --aln_parms) aln_parms=$2; echo "aln_parms options $aln_parms" >&2; shift 2 ;;
+			--sf_parms) sf_parms=$2; echo "sf_parms options $sf_parms" >&2; shift 2 ;;
             --bowtie) bowtie=1; echo "will align using bowtie" >&2; shift 1 ;;
             --bowtie_parms) bowtie_parms=$2; echo "bowtie_parms options $bowtie_parms" >&2; shift 2 ;;
             --prefix) prefix=$2; echo "prefix $prefix" >&2; shift 2 ;;
@@ -109,6 +111,9 @@ initialise ()
                        echo "       -ref <ref>          full path to reference";
                        echo "                   ";
                        echo "       -aln_parms <bwa aln parameters>";
+                       echo "                             no default";
+                       echo "                   ";
+                       echo "       -sf_parms <spatial_filter parameters>";
                        echo "                             no default";
                        echo "                   ";
                        echo "       -bowtie             will align using bowtie";
@@ -517,12 +522,12 @@ if [ $spatial_filter ] ; then
     fi
     echo runfolder directory $runfolder_dir >&2
 
-	spatial_filter -c -f -q -i $runfolder_dir/Data/Intensities --filter ${output}.filter $output
+	spatial_filter -c -f -q $sf_parms -i $runfolder_dir/Data/Intensities --filter ${output}.filter $output
 	if [ ! -s ${output}.filter ] ; then
 		echo "spatial_filter failed to create a filter file ${output}.filter" >&2
 		exit 1
 	fi
-	spatial_filter -a -f -q -i $runfolder_dir/Data/Intensities --filter ${output}.filter -o {$output}.filtered $output
+	spatial_filter -a -f -q $sf_parms -i $runfolder_dir/Data/Intensities --filter ${output}.filter -o {$output}.filtered $output
 	if [ ! -s ${output}.filtered ] ; then
 		echo "spatial_filter failed to apply filter and produce ${output}.filtered" >&2
 		exit 1
