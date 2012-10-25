@@ -1,6 +1,8 @@
 #ifndef RTS_H_INCLUDED
 #define RTS_H_INCLUDED
 
+#include <stdio.h>
+
 #define N_LANES 8
 #define N_TILES 120
 #define N_READS 3

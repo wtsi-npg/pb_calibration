@@ -1535,8 +1535,8 @@ void applyFilter(Settings *s)
 	readFilterData(fp, &hdr);
 	fclose(fp);
 
-	s->nregion_x = hdr->nregion_x;
-	s->nregion_y = hdr->nregion_y;
+	s->nregions_x = hdr.nregions_x;
+	s->nregions_y = hdr.nregions_y;
 
 	if (0 == s->compress)
 		strcat(out_mode, "u");
