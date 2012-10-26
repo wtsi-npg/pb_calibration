@@ -6,7 +6,6 @@
 #define N_LANES 8
 #define N_TILES 120
 #define N_READS 3
-#define N_CYCLES 250
 #define N_COMMENTS 100
 
 #define COORD_SHIFT   1000
@@ -62,6 +61,6 @@ void readHeader(FILE *fp, Header *hdr);
 void readFilterData(FILE *fp, Header *hdr);
 char getFilterData(int tile, int read, int cycle, int region);
 
-int xy2region(int x, int y, int nregions_x, int nregions_y);
+int xy2region(int x, int y, int region_size, int nregions_x, int nregions_y);
 
 #endif /* DIE_H_INCLUDED */

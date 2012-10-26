@@ -98,7 +98,7 @@
 #include <die.h>
 #include <rts.h>
 
-#include "version.h"
+#include <version.h>
 
 #define BASE_ALIGN      (1<<0)
 #define BASE_MISMATCH   (1<<1)
@@ -1170,7 +1170,7 @@ static void bam_header_add_pg(Settings *s, bam_header_t *bam_header, char *cl)
 static int updateRegionTable(Settings *s, int itile, int read, int x, int y, int *read_mismatch)
 {
 
-	int iregion = xy2region(x, y, s->nregions_x, s->nregions_y);
+        int iregion = xy2region(x, y, s->region_size, s->nregions_x, s->nregions_y);
 	int cycle;
 
         /* update region table */
@@ -1237,9 +1237,6 @@ void makeRegionTable(Settings *s, samfile_t *fp_bam, int *ntiles, size_t * nread
 			continue;
 
 		if (0 == s->read_length[bam_read]) {
-			if (read_length >= N_CYCLES) {
-				die("ERROR: too many cycles for read %d " "in bam file %d > %d.\n", bam_read, read_length, N_CYCLES);
-			}
 			s->read_length[bam_read] = read_length;
    	                initRTS(N_TILES, s->nregions, bam_read, read_length);
 		}
@@ -1270,7 +1267,7 @@ void makeRegionTable(Settings *s, samfile_t *fp_bam, int *ntiles, size_t * nread
 			itile = hd.i;
 		}
 
-		if (0 != updateRegionTable(s, itile, bam_read, bam_x, bam_y, bam_read_mismatch)) {
+                if (0 != updateRegionTable(s, itile, bam_read, bam_x, bam_y, bam_read_mismatch)) {
 			die("ERROR: updating quality values for tile %i.\n", tile);
 		}
 		nreads_bam++;
@@ -1336,7 +1333,7 @@ int filter_bam(Settings * s, samfile_t * fp_in_bam, samfile_t * fp_out_bam,
 		nreads_bam++;
 
 		char state = 0, bad_cycle_count = 0;
-		int iregion = xy2region(bam_x, bam_y, s->nregions_x, s->nregions_y);
+		int iregion = xy2region(bam_x, bam_y, s->region_size, s->nregions_x, s->nregions_y);
 		int read;
 		for (read = 0; read < N_READS; read++) {
 			int cycle;
@@ -1535,6 +1532,7 @@ void applyFilter(Settings *s)
 	readFilterData(fp, &hdr);
 	fclose(fp);
 
+	s->region_size = hdr.region_size;
 	s->nregions_x = hdr.nregions_x;
 	s->nregions_y = hdr.nregions_y;
 
@@ -1734,9 +1732,13 @@ int main(int argc, char **argv)
 		if (override_intensity_dir) { strcat(cmd, " -i "); strcat(cmd, override_intensity_dir); }
 		if (settings.snp_file)      { strcat(cmd, " -s "); strcat(cmd, settings.snp_file); }
 		if (settings.filter)        { strcat(cmd, " -F "); strcat(cmd, settings.filter); }
-		if (settings.width)         { strcat(cmd, " -x "); sprintf(num,"%d",settings.width);       strcat(cmd, num); }
-		if (settings.height)        { strcat(cmd, " -y "); sprintf(num,"%d",settings.height);      strcat(cmd, num); }
-		if (settings.region_size)   { strcat(cmd, " -r "); sprintf(num,"%d",settings.region_size); strcat(cmd, num); }
+		if (settings.width)                       { strcat(cmd, " -x "); sprintf(num,"%d",settings.width);       strcat(cmd, num); }
+		if (settings.height)                      { strcat(cmd, " -y "); sprintf(num,"%d",settings.height);      strcat(cmd, num); }
+		if (settings.region_size)                 { strcat(cmd, " -r "); sprintf(num,"%d",settings.region_size); strcat(cmd, num); }
+		if (settings.region_min_count)            { strcat(cmd, " -m "); sprintf(num,"%d",settings.region_min_count); strcat(cmd, num); }
+		if (settings.region_mismatch_threshold)   { strcat(cmd, " -z "); sprintf(num,"%d",settings.region_mismatch_threshold); strcat(cmd, num); }
+		if (settings.region_insertion_threshold)  { strcat(cmd, " -b "); sprintf(num,"%d",settings.region_insertion_threshold); strcat(cmd, num); }
+		if (settings.region_deletion_threshold)   { strcat(cmd, " -e "); sprintf(num,"%d",settings.region_deletion_threshold); strcat(cmd, num); }
 		strcat(cmd, " ");
 		strcat(cmd, settings.in_bam_file);
 		if (strlen(cmd) > 2047) die("Command line too big");
