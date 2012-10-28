@@ -1107,11 +1107,10 @@ static void append_header_text(bam_header_t * header, char *text, int len)
 	header->text[header->l_text] = 0;
 }
 
-static void bam_header_add_pg(Settings *s, bam_header_t *bam_header, char *cl)
+static void bam_header_add_pg(Settings *s, bam_header_t *bam_header, char *cl, char *id)
 {
 	char *text;
 	char *hl, *endl, *endt;
-	char *id = "pb_cal";
 	char *pn = "spatial_filter";
 	char *pp = NULL;
 	char *ds = "A program to apply a spatial filter";
@@ -1545,8 +1544,8 @@ void applyFilter(Settings *s)
 	}
 
 	out_bam_header = bam_header_dup(fp_input_bam->header);
-	bam_header_add_pg(s, out_bam_header, hdr.cmdLine);
-	bam_header_add_pg(s, out_bam_header, s->cmdline);
+	bam_header_add_pg(s, out_bam_header, hdr.cmdLine, "spfc");
+	bam_header_add_pg(s, out_bam_header, s->cmdline, "spfa");
 
 	out_bam_file = (NULL == s->output ? aprintf("/dev/stdout") : aprintf("%s/%s", s->working_dir, s->output));
 	fp_output_bam = samopen(out_bam_file, out_mode, out_bam_header);
