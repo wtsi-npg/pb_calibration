@@ -1134,7 +1134,7 @@ static void bam_header_add_pg(Settings *s, bam_header_t *bam_header, char *cl, c
 		}
 		*endl = 0;
 		if (0 == memcmp(hl, "@PG", 3)) {
-			if (NULL == (pp = strstr(hl, "PN:"))) {
+			if (NULL == (pp = strstr(hl, "ID:"))) {
 				die("ERROR: No ID in PG line \"%s\"\n", hl);
 			}
 			pp += 3;
