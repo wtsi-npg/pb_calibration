@@ -15,31 +15,18 @@ initialise ()
 
     # set defaults
     bam=""
-    rta=""
-    bustard="";
-    gerald="";
-    harold="";
-    runfolder_dir=""
-    bustard_dir=""
-    run=""
-    lane=""
     read=""
     read1=""
     read2=""
-    tiles=""
-    random=""
-    seed="12345"
     pf_filter=""
-    n_filter=""
     ref=""
     prefix=""
     aln_parms=""
-	sf_parms=""
-    bowtie=""
-    bowtie_parms="-l 32 -n 2 -e 2000 --best -S -X 3000"
-	spatial_filter=""
+    spatial_filter=""
+    intensity_dir=""
+    sf_parms=""
 
-    TEMP=`getopt -a -o h --long bam:,rta,bustard,gerald,harold,spatial_filter,runfolder_dir:,bustard_dir:,run:,lane:,read:,read1:,read2:,tiles:,random:,seed:,pf_filter,n_filter:,ref:,aln_parms:,sf_parms:,bowtie,bowtie_parms:,prefix:,help -n $0 -- "$@"`
+    TEMP=`getopt -a -o h --long bam:,read:,read1:,read2:,pf_filter,ref:,aln_parms:,spatial_filter,intensity_dir:,sf_parms:,prefix:,help -n $0 -- "$@"`
 
     if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
 
@@ -48,28 +35,15 @@ initialise ()
     while true ; do
         case "$1" in
             --bam) bam=$2; echo "input bam file $bam" >&2; shift 2 ;;
-            --rta) rta=1; echo "will read rta files" >&2; shift 1 ;;
-            --bustard) bustard=1; echo "will read bustard files" >&2; shift 1 ;;
-            --gerald) gerald=1; echo "will read gerald files" >&2; shift 1 ;;
-            --harold) harold=1; echo "will read harold files" >&2; shift 1 ;;
-			--spatial_filter) spatial_filter=1; echo "will apply spatial_filter" >&2; shift 1 ;;
-            --runfolder_dir) runfolder_dir=$2; echo "runfolder_dir $runfolder_dir" >&2; shift 2 ;;
-            --bustard_dir) bustard_dir=$2; echo "bustard_dir $bustard_dir" >&2; shift 2 ;;
-            --run) run=$2; echo "run $run" >&2; shift 2 ;;
-            --lane) lane=$2; echo "lane $lane" >&2; shift 2 ;;
             --read) read=$2; echo "read $read" >&2; shift 2 ;;
             --read1) read1=$2; echo "read1 $read1" >&2; shift 2 ;;
             --read2) read2=$2; echo "read2 $read2" >&2; shift 2 ;;
-            --tiles) tiles=$2; echo "tiles $tiles" >&2; shift 2 ;;
-            --random) random=$2; echo "random $random" >&2; shift 2 ;;
-            --seed) seed=$2; echo "seed=$seed" >&2; shift 2 ;;
             --pf_filter) pf_filter=1; echo "will purity filter" >&2; shift 1 ;;
-            --n_filter) n_filter=$2; echo "will filter $n_filter N's" >&2; shift 2 ;;
             --ref) ref=$2; echo "reference $ref" >&2; shift 2 ;;
             --aln_parms) aln_parms=$2; echo "aln_parms options $aln_parms" >&2; shift 2 ;;
-			--sf_parms) sf_parms=$2; echo "sf_parms options $sf_parms" >&2; shift 2 ;;
-            --bowtie) bowtie=1; echo "will align using bowtie" >&2; shift 1 ;;
-            --bowtie_parms) bowtie_parms=$2; echo "bowtie_parms options $bowtie_parms" >&2; shift 2 ;;
+ 	    --spatial_filter) spatial_filter=1; echo "will apply spatial_filter" >&2; shift 1 ;;
+            --intensity_dir) intensity_dir=$2; echo "intensity_dir $intensity_dir" >&2; shift 2 ;;
+	    --sf_parms) sf_parms=$2; echo "sf_parms options $sf_parms" >&2; shift 2 ;;
             --prefix) prefix=$2; echo "prefix $prefix" >&2; shift 2 ;;
             -h|--help) echo "Usage: $0 [options]";
                        echo "                   ";
@@ -81,31 +55,8 @@ initialise ()
                        echo "       -read2 <read2>      1-first read in bam file, 2-second read in bam file";
                        echo "                             paired reads, no default";
                        echo "                   ";
-                       echo "            or     ";
-                       echo "                   ";
-                       echo "       [-rta | -bustard | -gerald | -harold]";
-                       echo "                   ";
-                       echo "       -runfolder_dir      runfolder directory";
-                       echo "       -bustard_dir        bustard directory";
-                       echo "                   ";
-                       echo "       -run <run>          run";
-                       echo "       -lane <lane>        lane";
-                       echo "       -read <read>        read, used to filter qseq files";
-                       echo "                             single read, no default";
-                       echo "       -read1 <read1>      first read in pair, used to filter qseq files";
-                       echo "       -read2 <read2>      second read in pair, filter qseq files";
-                       echo "                             paired reads, no default";
-                       echo "       -tiles <tiles>      tiles e.g. 1,2,3,.. or 1-5,10-15,..";
-                       echo "                             default all tiles";
-                       echo "       -random <random>    use random % of reads from each tile";
-                       echo "                             default all reads";
-                       echo "       -seed <seed>        seed for random number generator";
-                       echo "                             default 12345";
                        echo "       -pf_filter          purity filter reads";
                        echo "                             default do not purity filter reads";
-                       echo "       -n_filter <count>   filter read with count N's";
-                       echo "                             default do not N filter reads";
-                       echo "       -spatial_filter     apply spatial filtering to the bam files";
                        echo "                   ";
                        echo "                   ";
                        echo "       -ref <ref>          full path to reference";
@@ -113,17 +64,16 @@ initialise ()
                        echo "       -aln_parms <bwa aln parameters>";
                        echo "                             no default";
                        echo "                   ";
+                       echo "                   ";
+                       echo "       -spatial_filter     apply spatial filtering to the bam files";
+                       echo "                   ";
+                       echo "       -intensity_dir <intensity directory>";
+                       echo "                   ";
                        echo "       -sf_parms <spatial_filter parameters>";
                        echo "                             no default";
                        echo "                   ";
-                       echo "       -bowtie             will align using bowtie";
-                       echo "                             default bwa";
-                       echo "       -bowtie_parms <bowtie parameters>";
-                       echo "                             default -l 32 -n 2 -e 2000 --best -S -X 3000";
-                       echo "                   ";
-                       echo "                   ";
                        echo "       -prefix <prefix>    output file prefix";
-                       echo "                             no default when aligning a bam file otherwise \$run_\$lane";
+                       echo "                             no default";
                        echo "                   ";
                        echo "       -h|--help   ";
                        echo "                   ";
@@ -134,32 +84,13 @@ initialise ()
     done
 
     if [ -z $bam ] ; then
-        if [ $bustard ] || [ $gerald ] || [ $rta ] || [ $harold ] ; then
-            if [ -z $run ] || [ -z $lane ] || ( [ -z $read ] && ( [ -z $read1 ] || [ -z $read2 ] ) ) ; then
-                echo "When aligning qseq files you must specify run, lane and read or read1+read2" >&2
-                exit 1
-            fi
-        else
-            if [ -z $lane ] || ( [ -z $read ] && ( [ -z $read1 ] || [ -z $read2 ] ) ) ; then
-                echo "When aligning qseq files you must specify lane and read or read1+read2" >&2
-                exit 1
-            fi
-        fi
-    else
-        if [ $bowtie ] ; then
-            echo "When aligning a bam file you cannot use bowtie" >&2
-            exit 1
-        fi
+        echo "You must supply a bam file" >&2
+        exit 1
+    fi
 
-        if [ -z $read ] && ( [ -z $read1 ] || [ -z $read2 ] ) ; then
-            echo "When aligning a bam file you must specify read or read1+read2" >&2
-            exit 1
-        fi
-
-        if [ -z $prefix ] ; then
-            echo "When aligning a bam file you must specify a prefix" >&2
-            exit 1
-        fi
+    if [ -z $read ] && ( [ -z $read1 ] || [ -z $read2 ] ) ; then
+        echo "You must specify read or read1+read2" >&2
+        exit 1
     fi
 
     if [ $read ] && ( [ $read1 ] || [ $read2 ] ) ; then
@@ -172,6 +103,15 @@ initialise ()
         exit 1
     fi
 
+    if [ $spatial_filter ] && [ -z $intensity_dir ] ; then
+        echo "You must supply an intensity_dir if you want to apply a spatial filter" >&2
+        exit 1
+    fi
+
+    if [ -z $prefix ] ; then
+        echo "You must supply a prefix" >&2
+        exit 1
+    fi
 }
 
 set -o errexit
@@ -182,235 +122,23 @@ tools=`readlink -f $tools`
 
 initialise "$@"
 
-if [ "${ref:0:1}" = "/" ] ; then
-  # assume ref has the form /../../bwa/somthing.fa as required by bwa
-
-  # bowtie requires a ref directory and a local ref
-  ref_dir=${ref%bwa*}bowtie
-  ref_base=`basename $ref`
-else
+if [ -z $ref ] ; then
   echo "You must specify the full path to the reference" >&2
   exit 1
 fi
 
-if [ -z $prefix ] ; then
-    if [ -z $bam ] ; then
-        if [ $rta ] || [ $bustard ] || [ $gerald ] || [ $harold ] ; then
-            prefix=${run}_${lane}
-        else
-            prefix=${lane}
-        fi
-    fi
-fi
 echo "Output file prefix ${prefix}" >&2
 
-if [ -z $bam ] ; then
-    get_tiles_parms=""
-    qseq_dir=`pwd`
-    qseq_ext="_custom"
-
-    if [ $rta ] || [ $bustard ] || [ $gerald ] || [ $harold ] ; then
-        if [ -z $runfolder_dir ] ; then
-            # use NPG to lookup the runfolder given the run
-            runfolder_dir=`perl -le 'use srpipe::runfolder; print srpipe::runfolder->new(id_run=>$ARGV[0])->runfolder_path' $run`
-            if [ -z $runfolder_dir ] ; then
-                echo "No runfolder for run $run" >&2
-                exit 1
-            fi
-        fi
-        if [ ! -d $runfolder_dir ] ; then
-            echo "Runfolder directory $runfolder_dir does not exist" >&2
-            exit 1
-        fi
-        echo runfolder directory $runfolder_dir >&2
-
-        if [ -z $bustard_dir ] ; then
-            if [ $rta ] || [ $harold ] ; then
-                bustard_dir=`ls -1td $runfolder_dir/Data/Intensities/PB_basecalls_* | head -1`
-                if [ -z $bustard_dir ] ; then
-                    echo "No rta directory in $runfolder_dir/Data/Intensities" >&2
-                    exit 1
-                fi
-            else
-                bustard_dir=`ls -1td $runfolder_dir/Data/Intensities/Bustard*_RTA | head -1`
-                if [ -z $bustard_dir ] ; then
-                    echo "No bustard directory in $runfolder_dir/Data/Intensities" >&2
-                    exit 1
-                fi
-            fi
-        fi
-        if [ ! -d $bustard_dir ] ; then
-            echo "Bustard directory $bustard_dir does not exist" >&2
-            exit 1
-        fi
-        echo "bustard directory $bustard_dir" >&2
-
-        if [ $rta ] || [ $bustard ] ; then
-            qseq_dir=$bustard_dir
-            qseq_ext=""
-        else
-            if [ $harold ] ; then
-                harold_dir=`ls -1td $bustard_dir/PB_cal | head -1`
-                if [ -z $harold_dir ] ; then
-                    echo "No harold directory in $bustard_dir" >&2
-                    exit 1
-                fi
-                if [ ! -d $harold_dir ] ; then
-                    echo "Harold directory $harold_dir does not exist" >&2
-                    exit 1
-                fi
-                echo "harold directory $harold_dir" >&2
-                qseq_dir=$harold_dir
-            fi
-
-            if [ $gerald ] ; then
-                gerald_dir=`ls -1td $bustard_dir/GERALD*_RTA | head -1`
-                if [ -z $gerald_dir ] ; then
-                    echo "No gerald directory in $bustard_dir" >&2
-                    exit 1
-                fi
-                if [ ! -d $gerald_dir ] ; then
-                    echo "Gerald directory $gerald_dir does not exist" >&2
-                    exit 1
-                fi
-                echo "gerald directory $gerald_dir" >&2
-                qseq_dir=$gerald_dir
-            fi
-
-            qseq_ext="_custom"
-        fi
-
-        get_tiles_parms="--runfolder $runfolder_dir"
-    fi
-
-    if [ $tiles ] ; then
-        get_tiles_parms="$get_tiles_parms --tiles $tiles"
-    fi
-
-    ptiles=`$tools/get_tiles.pl $get_tiles_parms --lane $lane --pad 4`
-
-    qseq2fastq_parms="-verbose -offset -index"
-    if [ $pf_filter ] ; then
-        qseq2fastq_parms="$qseq2fastq_parms -filter"
-    fi
-    if [ $random ] ; then
-        qseq2fastq_parms="$qseq2fastq_parms -random $random"
-    fi
-    if [ $seed ] ; then
-        qseq2fastq_parms="$qseq2fastq_parms -seed $seed"
-    fi
-
-    if [ $read ] ; then
-        fastq=${prefix}.fastq
-        echo "Making fastq file $fastq" >&2
-
-        qseq_files=""
-        for tile in $ptiles ; do
-            archive_qseq="$qseq_dir/s_${lane}_${read}_${tile}_qseq${qseq_ext}.txt"
-            if [ ! -f $archive_qseq ] ; then
-                echo "Unknown archive qseq file $archive_qseq" >&2
-                exit 1
-            fi
-            qseq_files="$qseq_files $archive_qseq"
-        done
-        if [ -z "$qseq_files" ] ; then
-            echo "No qseq files" >&2
-            exit 1
-        fi
-
-        qseq2fastq.pl $qseq2fastq_parms -read 1 $qseq_files > $fastq
-
-        if [ $n_filter ] ; then
-            echo "Filtering fastq..." >&2
-            good=${prefix}_good.fastq
-            bad=${prefix}_bad.fastq
-            $tools/filter_NNN_fastq.pl -t $n_filter $fastq $good $bad
-            if [ ! -s $good ] ; then
-                echo "No good reads align" >&2
-                exit 1
-            fi
-            mv $good $fastq
-        fi
-    else
-        fastq1=${prefix}_1.fastq
-        echo "Making fastq file $fastq1" >&2
-
-        qseq_files=""
-        for tile in $ptiles ; do
-            archive_qseq="$qseq_dir/s_${lane}_${read1}_${tile}_qseq${qseq_ext}.txt"
-            if [ ! -f $archive_qseq ] ; then
-                echo "Unknown archive qseq file $archive_qseq" >&2
-                exit 1
-            fi
-            qseq_files="$qseq_files $archive_qseq"
-        done
-        if [ -z "$qseq_files" ] ; then
-            echo "No qseq files" >&2
-            exit 1
-        fi
-
-        qseq2fastq.pl $qseq2fastq_parms -read 1 $qseq_files > $fastq1
-
-        if [ $n_filter ] ; then
-            echo "Filtering fastq..." >&2
-            good=${prefix}_1_good.fastq
-            bad=${prefix}_1_bad.fastq
-            $tools/filter_NNN_fastq.pl -t $n_filter $fastq1 $good $bad
-            if [ ! -s $good ] ; then
-                echo "No good reads align" >&2
-                exit 1
-            fi
-            mv $good $fastq1
-        fi
-
-        fastq2=${prefix}_2.fastq
-        echo "Making fastq file $fastq2" >&2
-
-        qseq_files=""
-        for tile in $ptiles ; do
-            archive_qseq="$qseq_dir/s_${lane}_${read2}_${tile}_qseq${qseq_ext}.txt"
-            if [ ! -f $archive_qseq ] ; then
-                echo "Unknown archive qseq file $archive_qseq" >&2
-                exit 1
-            fi
-            qseq_files="$qseq_files $archive_qseq"
-        done
-        if [ -z "$qseq_files" ] ; then
-            echo "No qseq files" >&2
-            exit 1
-        fi
-
-        qseq2fastq.pl $qseq2fastq_parms -read 2 $qseq_files > $fastq2
-
-        if [ $n_filter ] ; then
-            echo "Filtering fastq..." >&2
-            good=${prefix}_2_good.fastq
-            bad=${prefix}_2_bad.fastq
-            $tools/filter_NNN_fastq.pl -t $n_filter $fastq2 $good $bad
-            if [ ! -s $good ] ; then
-                echo "No good reads" >&2
-                exit 1
-            fi
-            mv $good $fastq2
-        fi
-    fi
-else
-    if [ ! -s $bam ] ; then
-        echo "input bam file $bam does not exist" >&2
-        exit 1
-    fi
-fi    
+if [ ! -s $bam ] ; then
+    echo "input bam file $bam does not exist" >&2
+    exit 1
+fi
 
 output=${prefix}.bam
 echo "Making bam file $output" >&2
 
-if [ $bam ] ; then
-    picard_jar="/software/solexa/bin/aligners/illumina2bam/current/BamMerger.jar"
-    picard_parms="VALIDATION_STRINGENCY=SILENT QUIET=true INPUT=$bam ALIGNED=/dev/stdin OUTPUT=/dev/stdout"
-else
-    picard_jar="/software/solexa/bin/aligners/picard/current/SamFormatConverter.jar"
-    picard_parms="VALIDATION_STRINGENCY=SILENT QUIET=true INPUT=/dev/stdin OUTPUT=/dev/stdout"
-fi    
+picard_jar="/software/solexa/bin/aligners/illumina2bam/current/BamMerger.jar"
+picard_parms="VALIDATION_STRINGENCY=SILENT QUIET=true INPUT=$bam ALIGNED=/dev/stdin OUTPUT=/dev/stdout"
 
 if [ $pf_filter ] ; then
   filter=512
@@ -418,76 +146,50 @@ else
   filter=0
 fi
 
-if [ $bowtie ] ; then
-    export BOWTIE_INDEXES=$ref_dir
-
-    bowtie --version     # just prints version info
-
-    if [ -z $read ] ; then
-        fastq_files="-1 $fastq1 -2 $fastq2"
-
-        bowtie $bowtie_parms \
-             --un ${prefix}_unmapped.fastq \
-             $ref_base \
-             $fastq_files \
-         | perl -aF'\t' -ne 'BEGIN{$filter=int(shift)} print unless ($F[1] & $filter || ($F[1] & 4 && $F[1] & 8))' $filter \
-         | java -Xmx1024M -jar $picard_jar $picard_parms > $output
+if [ $read ] ; then
+    sai=${prefix}.sai
+    if [ $bam ] ; then
+        fastq_files="-b${read} $bam"
     else
         fastq_files=$fastq
-
-        bowtie $bowtie_parms \
-             --un ${prefix}_unmapped.fastq \
-             $ref_base \
-             $fastq_files \
-         | perl -aF'\t' -ne 'BEGIN{$filter=int(shift)} print unless ($F[1] & $filter || ($F[1] & 4 && $F[1] & 8))' $filter \
-         | java -Xmx1024M -jar $picard_jar $picard_parms | samtools fixmate - $output
     fi
+    bwa aln $aln_parms $ref $fastq_files > $sai
+
+    sai_files=$sai
+    if [  $bam ] ; then
+        fastq_files=$bam
+     else
+        fastq_files=$fastq
+    fi
+    bwa samse $ref $sai_files $fastq_files \
+     | perl -aF'\t' -ne 'BEGIN{$filter=int(shift)} print unless ($F[1] & $filter || $F[1] & 4)' $filter \
+     | java -Xmx1024M -jar $picard_jar $picard_parms > $output
 else
-    if [ $read ] ; then
-        sai=${prefix}.sai
-        if [ $bam ] ; then
-            fastq_files="-b0 $bam"
-        else
-            fastq_files=$fastq
-        fi
-        bwa aln $aln_parms $ref $fastq_files > $sai
-
-        sai_files=$sai
-        if [  $bam ] ; then
-            fastq_files=$bam
-         else
-            fastq_files=$fastq
-        fi
-        bwa samse $ref $sai_files $fastq_files \
-         | perl -aF'\t' -ne 'BEGIN{$filter=int(shift)} print unless ($F[1] & $filter || ($F[1] & 4 && $F[1] & 8))' $filter \
-         | java -Xmx1024M -jar $picard_jar $picard_parms > $output
+    sai1=${prefix}_1.sai
+    if [ $bam ] ; then
+        fastq_files="-b1 $bam"
     else
-        sai1=${prefix}_1.sai
-        if [ $bam ] ; then
-            fastq_files="-b1 $bam"
-        else
-            fastq_files=$fastq1
-        fi
-        bwa aln $aln_parms $ref $fastq_files > $sai1
-
-        sai2=${prefix}_2.sai
-        if [ $bam ] ; then
-            fastq_files="-b2 $bam"
-        else
-            fastq_files=$fastq2
-        fi
-        bwa aln $aln_parms $ref $fastq_files > $sai2
-
-        sai_files="$sai1 $sai2"
-        if [ $bam ] ; then
-            fastq_files="$bam $bam"
-        else
-            fastq_files="$fastq1 $fastq2"
-        fi
-        bwa sampe $ref $sai_files $fastq_files \
-         | perl -aF'\t' -ne 'BEGIN{$filter=int(shift)} print unless ($F[1] & $filter || ($F[1] & 4 && $F[1] & 8))' $filter \
-         | java -Xmx1024M -jar $picard_jar $picard_parms | samtools fixmate - $output
+        fastq_files=$fastq1
     fi
+    bwa aln $aln_parms $ref $fastq_files > $sai1
+
+    sai2=${prefix}_2.sai
+    if [ $bam ] ; then
+        fastq_files="-b2 $bam"
+    else
+        fastq_files=$fastq2
+    fi
+    bwa aln $aln_parms $ref $fastq_files > $sai2
+
+    sai_files="$sai1 $sai2"
+    if [ $bam ] ; then
+        fastq_files="$bam $bam"
+    else
+        fastq_files="$fastq1 $fastq2"
+    fi
+    bwa sampe $ref $sai_files $fastq_files \
+     | perl -aF'\t' -ne 'BEGIN{$filter=int(shift)} print unless ($F[1] & $filter || ($F[1] & 4 && $F[1] & 8))' $filter \
+     | java -Xmx1024M -jar $picard_jar $picard_parms | samtools fixmate - $output
 fi
 
 if [ ! -s $output ] ; then
@@ -499,8 +201,8 @@ stat_file=${prefix}_flagstat.txt
 samtools flagstat $output > $stat_file
 
 if [ ! -s $stat_file ] ; then
-  echo "failed to create flagstat file" >&2
-  exit 1
+    echo "failed to create flagstat file" >&2
+    exit 1
 fi
 
 #
@@ -508,21 +210,7 @@ fi
 # Added 8 Oct 2012 by js10
 #
 if [ $spatial_filter ] ; then
-    if [ -z $runfolder_dir ] ; then
-        # use NPG to lookup the runfolder given the run
-        runfolder_dir=`perl -le 'use srpipe::runfolder; print srpipe::runfolder->new(id_run=>$ARGV[0])->runfolder_path' $run`
-        if [ -z $runfolder_dir ] ; then
-            echo "No runfolder for run $run" >&2
-            exit 1
-        fi
-    fi
-    if [ ! -d $runfolder_dir ] ; then
-        echo "Runfolder directory $runfolder_dir does not exist" >&2
-        exit 1
-    fi
-    echo runfolder directory $runfolder_dir >&2
-
-	$tools/spatial_filter -c -f -q $sf_parms -i $runfolder_dir/Data/Intensities --filter ${output}.filter $output
+	$tools/spatial_filter -c -f -q $sf_parms -i $intensity_dir --filter ${output}.filter $output
 	if [ ! -s ${output}.filter ] ; then
 		echo "spatial_filter failed to create a filter file ${output}.filter" >&2
 		exit 1
@@ -535,4 +223,3 @@ if [ $spatial_filter ] ; then
 	mv $output original_${output}
 	mv filtered_${output} $output
 fi
-
