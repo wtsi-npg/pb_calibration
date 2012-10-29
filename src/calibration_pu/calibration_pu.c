@@ -2081,30 +2081,6 @@ static char * get_real_path_name(const char* in_path) {
 
 
 static
-char *
-get_real_file_path_name(const char* file) {
-
-    char *tmp_path = sstrdup(file);
-    char *cp;
-    char *out_path;
-
-    if (NULL != (cp = strrchr(tmp_path, '/'))) {
-        *(cp+1) = 0;
-
-        out_path = get_real_path_name(tmp_path);
-
-    } else {
-        out_path = alloc_getcwd();
-    }
-
-    free(tmp_path);
-
-    return out_path;
-}
-
-
-
-static
 void usage(int code) {
     FILE* usagefp = stderr;
 

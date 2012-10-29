@@ -10,7 +10,7 @@
 #define COORD_FACTOR  10
 
 #define REGION_MAGIC                "RGFL"
-#define REGION_SIZE                 200
+#define REGION_SIZE                 800
 
 #define REGION_STATE_COVERAGE   (1<<1)
 #define REGION_STATE_MISMATCH   (1<<2)
