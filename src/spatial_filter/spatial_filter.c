@@ -1446,7 +1446,7 @@ static void usage(int code)
 	fprintf(usagefp, "    apply filter:\n");
 	fprintf(usagefp, "      -o         output\n");
 	fprintf(usagefp, "                 Output bam file name\n");
-	fprintf(usagefp, "                 no default: must be supplied\n");
+	fprintf(usagefp, "                 default: stdout\n");
 	fprintf(usagefp, "      -u         do not compress the output bam file\n");
 	fprintf(usagefp, "                 default: compress\n");
 	fprintf(usagefp, "      -f         mark filtered reads as QCFAIL\n");
@@ -1743,8 +1743,6 @@ int main(int argc, char **argv)
 
 	if (settings.calculate && (!override_intensity_dir && (!settings.width || !settings.height)))
                 die("ERROR: you must specify an intensity dir or Width and Height\n");
-
-	if (!settings.output && settings.apply) die("Error: no output BAM file specified\n");
 
         if (!settings.width < 0) die("Error: invalid tile width");
 	if (!settings.height < 0) die("Error: invalid tile height");
