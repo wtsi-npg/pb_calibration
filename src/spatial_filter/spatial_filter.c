@@ -1738,7 +1738,7 @@ int main(int argc, char **argv)
 		if (settings.height)        { strcat(cmd, " -y "); sprintf(num,"%d",settings.height);      strcat(cmd, num); }
 		if (settings.region_size)   { strcat(cmd, " -r "); sprintf(num,"%d",settings.region_size); strcat(cmd, num); }
 		strcat(cmd, " ");
-		strcat(cmd, settings.in_bam_file);
+		if (settings.in_bam_file) strcat(cmd, settings.in_bam_file);
 		if (strlen(cmd) > 2047) die("Command line too big");
 	}
 
