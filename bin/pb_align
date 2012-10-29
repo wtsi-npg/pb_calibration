@@ -527,7 +527,7 @@ if [ $spatial_filter ] ; then
 		echo "spatial_filter failed to create a filter file ${output}.filter" >&2
 		exit 1
 	fi
-	$tools/spatial_filter -a -f -q $sf_parms -i $runfolder_dir/Data/Intensities --filter ${output}.filter -o filtered_${output} $output
+	$tools/spatial_filter -a -f -q --filter ${output}.filter -o filtered_${output} $output
 	if [ ! -s filtered_${output} ] ; then
 		echo "spatial_filter failed to apply filter and produce filtered_${output}" >&2
 		exit 1
