@@ -159,7 +159,7 @@ static void checked_chdir(const char *dir)
 
 static void setRegions(Settings * s)
 {
-	// if an intensity directory is given, use that to find the image size
+	// if an intensity directory is given read the ImageSize.dat file to get the tile size
 	if (s->intensity_dir) {
                 char *file = NULL;
                 size_t file_sz = strlen(s->intensity_dir) + 30;
@@ -1737,6 +1737,19 @@ int main(int argc, char **argv)
 
 	if (optind < argc) settings.in_bam_file = argv[optind];
 
+	if (!settings.in_bam_file && !dumpFilter) die("Error: no BAM file specified\n");
+
+        if (!settings.filter && (dumpFilter || settings.apply)) die("Error: no filter file specified\n");
+
+	if (settings.calculate && (!override_intensity_dir && (!settings.width || !settings.height)))
+                die("ERROR: you must specify an intensity dir or Width and Height\n");
+
+	if (!settings.output && settings.apply) die("Error: no output BAM file specified\n");
+
+        if (!settings.width < 0) die("Error: invalid tile width");
+	if (!settings.height < 0) die("Error: invalid tile height");
+	if (!settings.region_size < 0) die("Error: invalid region size");
+
 	// create pseudo command line
 	if (settings.calculate) {
 		char arg[64];
@@ -1780,15 +1793,12 @@ int main(int argc, char **argv)
 	if (!settings.quiet) display("Cmd: %s\n", cmd);
 	settings.cmdline = cmd;
 
-	if (!settings.in_bam_file && !dumpFilter) die("No BAM file specified\n");
-
-	if (!settings.output && settings.apply) die("No output BAM file specified\n");
-
-        if (!settings.filter && (dumpFilter || settings.apply)) die("No filter file specified\n");
-
-        if (!settings.width < 0) die("Invalid tile width");
-	if (!settings.height < 0) die("Invalid tile height");
-	if (!settings.region_size < 0) die("Invalid region size");
+        if (override_intensity_dir) {
+                settings.intensity_dir = get_real_path_name(override_intensity_dir);
+                if (NULL == settings.intensity_dir) {
+                        die("ERROR: can't process intensity dir: %s\n", override_intensity_dir);
+                }
+        }
 
 	/* preserve starting directory */
 	settings.working_dir = getcwd(NULL,0);
@@ -1803,20 +1813,8 @@ int main(int argc, char **argv)
 	if (dumpFilter) dumpFilterFile(settings.filter);
 
 	/* calculate the filter */
-	if (settings.calculate) {
-                /* get absolute intensity dir */
-                if (override_intensity_dir) {
-                        settings.intensity_dir = get_real_path_name(override_intensity_dir);
-                        if (NULL == settings.intensity_dir) {
-                                die("ERROR: can't process intensity dir: %s\n", override_intensity_dir);
-                        }
-                } else {
-                        if (!settings.width || !settings.height) {
-                                die("ERROR: you must specify an intensity dir or Width and Height\n");
-                        }
-                }
-
-                /* set the number of regions by reading the ImageSize.dat file in the intensity dir */
+        if (settings.calculate) {
+                /* set the number of regions */
                 setRegions(&settings);
 
                 /* read the snp_file */
