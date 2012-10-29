@@ -8,3 +8,12 @@ test_rts_LDADD = -L../shared -lhelper_funcs
 test_aprintf_LDADD = -L../shared -lhelper_funcs
 TESTS = test_rts test_aprintf
 check_PROGRAMS = $(TESTS)
+
+BUILT_SOURCES = version.h
+
+version:
+
+version.h: version
+	echo -n const char *version = \" > version.h
+	../../bin/gitver | tr -d "\n" >> version.h
+	echo \"\; >> version.h
