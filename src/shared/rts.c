@@ -163,7 +163,6 @@ int xy2region(int x, int y, int region_size, int nregions_x, int nregions_y)
 {
 	int coord_shift = (_hdr ? _hdr->coord_shift : COORD_SHIFT);
 	int coord_factor = (_hdr ? _hdr->coord_factor : COORD_FACTOR);
-    int nregions = nregions_x * nregions_y;
     float x_coord = (float)(x - coord_shift) / (float)coord_factor;
     float y_coord = (float)(y - coord_shift) / (float)coord_factor;
     return (int)(x_coord / region_size) * nregions_y + (int)(y_coord / region_size);
