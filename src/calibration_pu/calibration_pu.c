@@ -40,42 +40,11 @@
  */
 
 /*
- * Parts of this code have been edited by Illumina.  These edits have been
- * made available under the following license:
- *
- * Copyright (c) 2008-2009, Illumina Inc.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *
- *     * Redistributions in binary form must reproduce the above
- *       copyright notice, this list of conditions and the following
- *       disclaimer in the documentation and/or other materials
- *       provided with the distribution.
- *
- *     * Neither the name of the Illumina Inc. nor the
- *       names of its contributors may be used to endorse or promote
- *       products derived from this software without specific prior
- *       written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY ILLUMINA ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL ILLUMINA BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Parts of this code were inherited from sequenceread, see
+ * http://sequenceread.svn.sourceforge.net/viewvc/sequenceread, which
+ * contained code edited by Illumina. As no illumina code is used here
+ * the Illumina copyright notice has been removed
  */
-
 
 /*
  * Author: Steven Leonard, Jan 2009
@@ -142,9 +111,7 @@
 #include <die.h>
 #include <rts.h>
 
-#define PBP_VERSION PACKAGE_VERSION
-
-const char * pbs_c_rev = "$Revision$";
+#include <version.h>
 
 #define MAX_CIF_CHUNK_BYTES 4194304
 
@@ -212,13 +179,12 @@ typedef struct {
     int cstart[3];
     int quiet;
     int filter_bad_tiles;
-    int n_bins_left;
-    int n_bins_right;
-    int width;
-    int height;
+    int spatial_filter;
+    int region_size;
     int nregions_x;
     int nregions_y;
-    int nregions;
+    int n_bins_left;
+    int n_bins_right;
 } Settings;
 
 typedef union {
@@ -258,46 +224,6 @@ checked_chdir(const char* dir){
 }
 
 static char *complement_table = NULL;
-
-int xy2region(Settings *s, int x, int y)
-{
-	float x_coord = (float)(x - COORD_SHIFT) / (float)COORD_FACTOR;
-	float y_coord = (float)(y - COORD_SHIFT) / (float)COORD_FACTOR;
-	return (int)(x_coord / REGION_SIZE) * s->nregions_y + (int)(y_coord / REGION_SIZE);
-}
-
-static void setRegions(Settings * s)
-{
-	if (s->intensity_dir) {
-                char *file = NULL;
-		size_t file_sz = strlen(s->intensity_dir) + 30;
-                int fd = -1;
-                ssize_t res;
-                uint32_t width, height;
-		file = smalloc(file_sz);
-		snprintf(file, file_sz, "%s/../ImageSize.dat", s->intensity_dir);
-		fd = open(file, O_RDONLY);
-		if (fd < 0) die("Couldn't open %s : %s\n", file, strerror(errno));
-		res = read(fd, &width, 4);
-		if (4 != res) die("Error reading %s\n", file);
-		res = read(fd, &height, 4);
-		if (4 != res) die("Error reading %s\n", file);
-		s->width = width;
-		s->height = height;
-                if (!s->quiet) display("Read tile width=%u height=%u from file %s\n", s->width, s->height, file);
-		close(fd);
-   	        free(file);
-	}
-
-	s->nregions_x = 1 + (int)(s->width / REGION_SIZE);
-	s->nregions_y = 1 + (int)(s->height / REGION_SIZE);
-
-	s->nregions = s->nregions_x * s->nregions_y;
-
-        if (!s->quiet) display("nregions_x=%d nregions_y=%d nregions=%d\n", s->nregions_x, s->nregions_y, s->nregions);
-        
-	return;
-}
 
 static void readSnpFile(Settings *s)
 {
@@ -1799,7 +1725,7 @@ static int updateSurvTable(Settings *s, SurvTable **sts, CifData *cif_data,
 
     assert((cstart + read_length) <= cif_data->ncycles);
 
-    if (s->nregions) iregion = xy2region(s, x, y);
+    if (s->spatial_filter) iregion = xy2region(x, y, s->region_size, s->nregions_x, s->nregions_y);
 
 #ifdef CALDATA
     {
@@ -1821,7 +1747,7 @@ static int updateSurvTable(Settings *s, SurvTable **sts, CifData *cif_data,
         int ibin;
 
         /* set cycle ct */
-        if (s->nregions) {
+        if (s->spatial_filter) {
             int state = (getFilterData(tile, read, b, iregion) & REGION_STATE_MISMATCH) ? 1 : 0;
             st = sts[state*N_READS+read] + b;
         }else{
@@ -1983,16 +1909,9 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
         if (0 == read_length) continue;
 
         if (0 == s->read_length[bam_read]) {
-            if(read_length >= N_CYCLES){
-                fprintf(stderr,
-                        "ERROR: too many cycles for read %d "
-                        "in bam file %d > %d.\n",
-                        bam_read, read_length, N_CYCLES);
-                exit(EXIT_FAILURE);
-            }
             s->read_length[bam_read] = read_length;
 
-            if (s->nregions) {
+            if (s->spatial_filter) {
                 /* if we have a filter file we allocate memory for each state now */
                 int state;
                 for(state=0;state<N_STATES;state++) {
@@ -2077,7 +1996,7 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
 #endif            
         }
 
-        if (0 == s->nregions) {
+        if (0 == s->spatial_filter) {
             /* if we don't have a filter file we allocate memory for this tile now */
             if (NULL == sts[itile*N_READS+bam_read]) {
                 sts[itile*N_READS+bam_read] = smalloc(read_length * sizeof(SurvTable));
@@ -2088,7 +2007,7 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
         }
         
 
-        if (0 != updateSurvTable(s, (s->nregions ? sts : &sts[itile*N_READS]), cif_data,
+        if (0 != updateSurvTable(s, (s->spatial_filter ? sts : &sts[itile*N_READS]), cif_data,
                                  bam_offset, bam_tile, bam_x, bam_y, bam_read, bam_read_mismatch,
                                  bam_read_seq, bam_read_qual, bam_read_ref, fp_bam, bam, fp_caldata)) {
             fprintf(stderr,"ERROR: updating quality values for tile %i.\n", tile);
@@ -2098,7 +2017,7 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
         nreads_bam++;
     }
     
-    if (s->nregions) {
+    if (s->spatial_filter) {
         int state;
         for(state=0;state<N_STATES;state++)
             completeSurvTable(s, &sts[state*N_READS]);
@@ -2162,34 +2081,10 @@ static char * get_real_path_name(const char* in_path) {
 
 
 static
-char *
-get_real_file_path_name(const char* file) {
-
-    char *tmp_path = sstrdup(file);
-    char *cp;
-    char *out_path;
-
-    if (NULL != (cp = strrchr(tmp_path, '/'))) {
-        *(cp+1) = 0;
-
-        out_path = get_real_path_name(tmp_path);
-
-    } else {
-        out_path = alloc_getcwd();
-    }
-
-    free(tmp_path);
-
-    return out_path;
-}
-
-
-
-static
 void usage(int code) {
     FILE* usagefp = stderr;
 
-    fprintf(usagefp, "pb_calibration v" PBP_VERSION "\n\n");
+    fprintf(usagefp, "pb_calibration v%s\n\n", version);
     fprintf(usagefp, 
             "Usage: pb_calibration [options] bam_file\n"
             ""
@@ -2283,7 +2178,6 @@ int main(int argc, char **argv) {
     samfile_t *fp_bam = NULL;
     const char *override_intensity_dir = NULL;
     const char *filter_file = NULL;
-    Header filter_header;
     int ntiles = 0;
     int nreads = 0;
     int nst = 0;
@@ -2294,6 +2188,10 @@ int main(int argc, char **argv) {
     settings.prefix = NULL;
     settings.quiet = 0;
     settings.filter_bad_tiles = 0;
+    settings.spatial_filter = 0;
+    settings.region_size = 0;
+    settings.nregions_x = 0;
+    settings.nregions_y = 0;
     settings.n_bins_left = 2;
     settings.n_bins_right = 2;
     settings.cstart[0] = 0;
@@ -2310,11 +2208,6 @@ int main(int argc, char **argv) {
     settings.n_cif_dirs     = 0;
     settings.cif_lane_index = NULL;
     settings.n_cif_lanes    = 0;
-    settings.width      = 0;
-    settings.height     = 0;
-    settings.nregions   = 0;
-    settings.nregions_x = 0;
-    settings.nregions_y = 0;
     
     settings.cmdline = get_command_line(argc, argv);
 
@@ -2448,14 +2341,13 @@ int main(int argc, char **argv) {
     if (NULL != filter_file) {
         FILE *fp = fopen(filter_file, "rb");
         if (!fp) die("Can't open filter file %s\n", filter_file);
+        Header filter_header;
         readHeader(fp, &filter_header);
         readFilterData(fp, &filter_header);
-
-        /* set the number of regions by reading the ImageSize.dat file */
-        setRegions(&settings);
-        if (0 == settings.nregions) {
-                die("ERROR: invalid tile size\n");
-        }
+        settings.spatial_filter = 1;
+        settings.region_size = filter_header.region_size;
+        settings.nregions_x = filter_header.nregions_x;
+        settings.nregions_y = filter_header.nregions_y;
     }
 
     /* Look for CIF directories */
@@ -2480,14 +2372,11 @@ int main(int argc, char **argv) {
     if (!settings.quiet) {
         fprintf(stderr, "Processed %8d traces\n", nreads);
         if (NULL != settings.snp_hash) {
+            HashIter *tileIter = HashTableIterCreate();
+            HashItem *hashItem;
             size_t nsnps = 0;
-            int ibucket;
-            for (ibucket=0; ibucket<settings.snp_hash->nbuckets; ibucket++) {
-                HashItem *hi;
-                for (hi = settings.snp_hash->bucket[ibucket]; hi; hi = hi->next)
-                    if (hi->data.i)
-                        nsnps += hi->data.i;
-            }
+            while ((hashItem = HashTableIterNext(settings.snp_hash, tileIter)))
+                nsnps += hashItem->data.i;
             fprintf(stderr, "Ignored %lu snps\n", nsnps);
         }
     }
@@ -2495,7 +2384,7 @@ int main(int argc, char **argv) {
     /* back to where we belong */
     checked_chdir(settings.working_dir);
 
-    if (0 == settings.nregions) makeGlobalSurvTable(&settings, ntiles, sts);
+    if (!settings.spatial_filter) makeGlobalSurvTable(&settings, ntiles, sts);
 
     outputSurvTable(&settings, sts);
 
