@@ -381,23 +381,23 @@ static void findBadRegions(Settings *s, int ntiles)
                                                 RegionTable *rt = getRTS(itile,iregion,read,cycle);
                                                 rt->state = tile_state | (rt->state & REGION_STATE_COVERAGE);
                                         }
-#if 1
-				int mismatch = 0, insertion = 0, deletion = 0, soft_clip = 0;
-				long quality_bases = 0, quality_errors = 0;
-				for (iregion = 0; iregion < s->nregions; iregion++) {
-					RegionTable *rt = getRTS(itile,iregion,read,cycle);
-					if (rt->state & REGION_STATE_MISMATCH)  mismatch++;
-					if (rt->state & REGION_STATE_INSERTION) insertion++;
-					if (rt->state & REGION_STATE_DELETION)  deletion++;
-					if (rt->state & REGION_STATE_SOFT_CLIP) soft_clip++;
-					quality_bases  += rt->align;
-					quality_errors += rt->mismatch;
-				}
-				float ssc = 1.0;
-				float quality = -10.0 * log10((quality_errors + ssc)/(quality_bases + ssc));
-				fprintf(stderr, "tile=%-4d read=%1d cycle=%-3d quality=%.2f mismatch=%-4d insertion=%-4d deletion=%-4d soft_clip=%-4d\n",
-					tile, read, cycle, quality, mismatch, insertion, deletion, soft_clip);
-#endif
+			        if (!s->quiet) {
+                                        int mismatch = 0, insertion = 0, deletion = 0, soft_clip = 0;
+                                        long quality_bases = 0, quality_errors = 0;
+                                        for (iregion = 0; iregion < s->nregions; iregion++) {
+                                                RegionTable *rt = getRTS(itile,iregion,read,cycle);
+                                                if (rt->state & REGION_STATE_MISMATCH)  mismatch++;
+                                                if (rt->state & REGION_STATE_INSERTION) insertion++;
+                                                if (rt->state & REGION_STATE_DELETION)  deletion++;
+                                                if (rt->state & REGION_STATE_SOFT_CLIP) soft_clip++;
+                                                quality_bases  += rt->align;
+                                                quality_errors += rt->mismatch;
+                                        }
+                                        float ssc = 1.0;
+                                        float quality = -10.0 * log10((quality_errors + ssc)/(quality_bases + ssc));
+                                        display("tile=%-4d read=%1d cycle=%-3d quality=%.2f mismatch=%-4d insertion=%-4d deletion=%-4d soft_clip=%-4d\n",
+                                                tile, read, cycle, quality, mismatch, insertion, deletion, soft_clip);
+                                }
 			}
 		}
 	}
