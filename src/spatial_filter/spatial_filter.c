@@ -1786,7 +1786,7 @@ int main(int argc, char **argv)
 		if (settings.output)   { strcat(cmd, " -o "); strcat(cmd, settings.output); }
 		if (settings.filter)   { strcat(cmd, " -F "); strcat(cmd, settings.filter); }
 		strcat(cmd, " ");
-		strcat(cmd, settings.in_bam_file);
+		if (settings.in_bam_file) strcat(cmd, settings.in_bam_file);
 		if (strlen(cmd) > 2047) die("Command line too big");
 	}
 
