@@ -46,11 +46,13 @@ Readonly::Scalar my $NUM_ROWS         => 8;
 Readonly::Scalar my $IMAGE_GAP        => 3;
 Readonly::Scalar my $LABEL_HEIGHT     => 25;
 
-Readonly::Hash   my %MMATCH_BITMAP_KEYS  => { 'mmatch' => 3, 'insert' => 4, 'del' => 8, };
+Readonly::Hash   my %MMATCH_BITMAP_KEYS  => { 'mmatch' => 2, 'insert' => 4, 'del' => 8, };
 Readonly::Hash   my %KNOWN_TYPES         => { 'qual' => 1, 'mmatch' => 1, 'insert' => 1, 'del' => 1, };
 Readonly::Scalar my $CHAR_SHIFT          => 33;
 
 Readonly::Hash   my %TILES_INFO        => { '12' => { 'num_columns' => 1, 'num_rows' => 12, },
+                                            '14' => { 'num_columns' => 1, 'num_rows' => 14, },
+                                            '28' => { 'num_columns' => 1, 'num_rows' => 14, },
                                             '64' => { 'num_columns' => 2, 'num_rows' => 16, },
                                             '48' => { 'num_columns' => 3, 'num_rows' =>  8, },
                                             '96' => { 'num_columns' => 3, 'num_rows' => 16, },
@@ -65,7 +67,7 @@ Readonly::Scalar my $NUM_IMAGES_IN_REPORT_ROW => 18;
 has 'type' =>     (  isa      => 'ArrayRef',
                      is       => 'ro',
                      required => 0,
-                     default  => sub{ return ['qual', 'mmatch', 'insert']; },
+                     default  => sub{ return ['qual', 'mmatch', 'insert', 'del']; },
                      writer   => '_set_type',
                      documentation => 'array ref of types of image (insert, del, qual, mmatch); default - insert, qual, mmatch; oqual is added automatically if available',
                   );
@@ -517,7 +519,7 @@ sub _compute {
       @temp = map {ord($_) - $char_shift} split(q(), $columns->[$index]);
     } else {
       my $key = $MMATCH_BITMAP_KEYS{$type};
-      @temp = map {(ord($_) - $char_shift == $key) ? 1 : 0  } split(q(),$columns->[$MMATCH_BITMAP_INDEX]);
+      @temp = map {((ord($_) - $char_shift) & $key) ? 1 : 0  } split(q(),$columns->[$MMATCH_BITMAP_INDEX]);
     }
     push @data, \@temp;
   }
