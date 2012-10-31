@@ -107,16 +107,18 @@
 #define BASE_SOFT_CLIP  (1<<4)
 #define BASE_KNOWN_SNP  (1<<5)
 
-#define PHRED_QUAL_OFFSET  33    // phred quality values offset
+#define PHRED_QUAL_OFFSET  33  // phred quality values offset
 
-#define REGION_MIN_COUNT            160	  // minimum coverage when setting region state
-#define REGION_MISMATCH_THRESHOLD   1.25  // threshold for setting region mismatch state
-#define REGION_INSERTION_THRESHOLD  1.25  // threshold for setting region insertion state
-#define REGION_DELETION_THRESHOLD   1.25  // threshold for setting region deletion state
+#define REGION_MIN_COUNT            10	   // minimum coverage when setting region state
 
-#define TILE_REGION_THRESHOLD  75.0		// threshold for setting region state at tile level
+// assuming a region size of 700 and ~125 reads in a region, a threshold of 0.016 equates to 2 reads in a region
+#define REGION_MISMATCH_THRESHOLD   0.016  // threshold for setting region mismatch state
+#define REGION_INSERTION_THRESHOLD  0.016  // threshold for setting region insertion state
+#define REGION_DELETION_THRESHOLD   0.016  // threshold for setting region deletion state
 
-#define REGION_STATE_MASK  (REGION_STATE_INSERTION | REGION_STATE_DELETION)    // region mask used to filter reads
+#define TILE_REGION_THRESHOLD  0.75  // threshold for setting region state at tile level
+
+#define REGION_STATE_MASK  (REGION_STATE_INSERTION | REGION_STATE_DELETION)  // region mask used to filter reads
 
 typedef struct {
 	char *cmdline;
@@ -358,11 +360,11 @@ static void findBadRegions(Settings *s, int ntiles)
 					n = max(n, s->region_min_count);
 
 					// mismatch - mark bins with maximum mismatch rate > threshold
-					if ((100.0 * rt->mismatch / n)  >= s->region_mismatch_threshold)  rt->state |= REGION_STATE_MISMATCH;
+					if (((float)rt->mismatch  / (float)n) >= s->region_mismatch_threshold)  rt->state |= REGION_STATE_MISMATCH;
 					// insertion - mark bins with maximum insertion rate > threshold
-					if ((100.0 * rt->insertion / n) >= s->region_insertion_threshold) rt->state |= REGION_STATE_INSERTION;
+					if (((float)rt->insertion / (float)n) >= s->region_insertion_threshold) rt->state |= REGION_STATE_INSERTION;
 					// deletion - mark bins with maximum deletion rate > threshold
-					if ((100.0 * rt->deletion / n)  >= s->region_deletion_threshold)  rt->state |= REGION_STATE_DELETION;
+					if (((float)rt->deletion  / (float)n) >= s->region_deletion_threshold)  rt->state |= REGION_STATE_DELETION;
 					//if (rt->state) display("%d:%d:%d:%d:%d:%d\t%02x\n", s->lane, tileArray[itile], iregion, read, cycle, n, rt->state);
 				}
 				// ignoring low coverage, if all regions with a non-zero state have the same state and the
@@ -376,7 +378,7 @@ static void findBadRegions(Settings *s, int ntiles)
 					if (state != tile_state) break;
 					nregions++;
 				}
-				if (iregion == s->nregions && ((100.0 * nregions/s->nregions) >= TILE_REGION_THRESHOLD))
+				if (iregion == s->nregions && (((float)nregions/(float)s->nregions) >= TILE_REGION_THRESHOLD))
                                         for (iregion = 0; iregion < s->nregions; iregion++) {
                                                 RegionTable *rt = getRTS(itile,iregion,read,cycle);
                                                 rt->state = tile_state | (rt->state & REGION_STATE_COVERAGE);
@@ -1435,13 +1437,13 @@ static void usage(int code)
 	fprintf(usagefp, "                 default %d\n", REGION_MIN_COUNT);
 	fprintf(usagefp, "      --region_mismatch_threshold\n");
 	fprintf(usagefp, "                 threshold for setting region mismatch state\n");
-	fprintf(usagefp, "                 default %-6.2f\n", REGION_MISMATCH_THRESHOLD);
+	fprintf(usagefp, "                 default %-6.4f\n", REGION_MISMATCH_THRESHOLD);
 	fprintf(usagefp, "      --region_insertion_threshold\n");
 	fprintf(usagefp, "                 threshold for setting region insertion state\n");
-	fprintf(usagefp, "                 default %-6.2f\n", REGION_INSERTION_THRESHOLD);
+	fprintf(usagefp, "                 default %-6.4f\n", REGION_INSERTION_THRESHOLD);
 	fprintf(usagefp, "      --region_deletion_threshold\n");
 	fprintf(usagefp, "                 threshold for setting region deletion state\n");
-	fprintf(usagefp, "                 default %-6.2f\n", REGION_DELETION_THRESHOLD);
+	fprintf(usagefp, "                 default %-6.4f\n", REGION_DELETION_THRESHOLD);
 	fprintf(usagefp, "\n");
 	fprintf(usagefp, "    apply filter:\n");
 	fprintf(usagefp, "      -o         output\n");
@@ -1765,11 +1767,11 @@ int main(int argc, char **argv)
                                                            strcat(cmd, arg); }
 		if (settings.region_min_count)           { snprintf(arg, 64, " -region_min_count %d", settings.region_min_count);
                                                            strcat(cmd, arg); }
-		if (settings.region_mismatch_threshold)  { snprintf(arg, 64, " -region_mismatch_threshold %-6.2f", settings.region_mismatch_threshold);
+		if (settings.region_mismatch_threshold)  { snprintf(arg, 64, " -region_mismatch_threshold %-6.4f", settings.region_mismatch_threshold);
                                                            strcat(cmd, arg); }
-		if (settings.region_insertion_threshold) { snprintf(arg, 64, " -region_insertion_threshold %-6.2f", settings.region_insertion_threshold);
+		if (settings.region_insertion_threshold) { snprintf(arg, 64, " -region_insertion_threshold %-6.4f", settings.region_insertion_threshold);
                                                            strcat(cmd, arg); }
-		if (settings.region_deletion_threshold)  { snprintf(arg, 64, " -region_deletion_threshold %-6.2f", settings.region_deletion_threshold);
+		if (settings.region_deletion_threshold)  { snprintf(arg, 64, " -region_deletion_threshold %-6.4f", settings.region_deletion_threshold);
                                                            strcat(cmd, arg); }
 		strcat(cmd, " ");
 		strcat(cmd, settings.in_bam_file);
