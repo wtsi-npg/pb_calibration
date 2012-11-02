@@ -1,3 +1,2 @@
 
-
-SUBDIRS = shared calibration_pu predictor_pu spatial_filter tests man
+SUBDIRS = shared calibration_pu predictor_pu spatial_filter
