@@ -153,13 +153,13 @@ if [ $pair -gt 0 ] ; then
     count=`awk '/[0-9]+ with itself and mate mapped/ {print $1}' $stat_file`
     if [ $count -lt 200000 ] ; then
         echo "Only $count paired reads align < 200000" >&2
-####        exit 0
+        exit 0
     fi
 else
     count=`awk '/[0-9]+ mapped/ {print $1}' $stat_file`
     if [ $count -lt 100000 ] ; then
         echo "Only $count reads align < 100000" >&2
-####        exit 0
+        exit 0
     fi
 fi
 
