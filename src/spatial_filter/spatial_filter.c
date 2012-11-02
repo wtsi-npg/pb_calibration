@@ -39,43 +39,6 @@
  */
 
 /*
- * Parts of this code have been edited by Illumina.  These edits have been
- * made available under the following license:
- *
- * Copyright (c) 2008-2009, Illumina Inc.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *
- *     * Redistributions in binary form must reproduce the above
- *       copyright notice, this list of conditions and the following
- *       disclaimer in the documentation and/or other materials
- *       provided with the distribution.
- *
- *     * Neither the name of the Illumina Inc. nor the
- *       names of its contributors may be used to endorse or promote
- *       products derived from this software without specific prior
- *       written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY ILLUMINA ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL ILLUMINA BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- */
-
-/*
  * Author: Steven Leonard, Jan 2009
  *
  * This code looks for spatial features given an aligned bam file
@@ -92,10 +55,13 @@
  * PROPERLY_PAIRED
  *   only use properly paired reads when building calibration table
  *
+ * BINARY_FILTER_FILE
+ *   write filter file in binary format
  */
 
-//#define QC_FAIL
-//#define PROPERLY_PAIRED
+#define QC_FAIL
+#define PROPERLY_PAIRED
+#define BINARY_FILTER_FILE
 
 #ifdef HAVE_CONFIG_H
 #include "pb_config.h"
@@ -132,14 +98,7 @@
 #include <die.h>
 #include <rts.h>
 
-#define PBP_VERSION PACKAGE_VERSION
-
-const char *pbs_c_rev = "$Revision$";
-
-#define N_LANES 8
-#define N_TILES 120
-#define N_READS 2
-#define N_CYCLES 250
+#include <version.h>
 
 #define BASE_ALIGN      (1<<0)
 #define BASE_MISMATCH   (1<<1)
@@ -148,25 +107,18 @@ const char *pbs_c_rev = "$Revision$";
 #define BASE_SOFT_CLIP  (1<<4)
 #define BASE_KNOWN_SNP  (1<<5)
 
-#define PHRED_QUAL_OFFSET 33	// phred quality values offset
+#define PHRED_QUAL_OFFSET  33  // phred quality values offset
 
-#define COORD_SHIFT       1000.0
-#define COORD_FACTOR      10.0
-#define REDUCTION_FACTOR  200.0
+#define REGION_MIN_COUNT            10	   // minimum coverage when setting region state
 
-#define REGION_MISMATCH_THRESHOLD   50.0
-#define REGION_INSERTION_THRESHOLD  20.0
-#define REGION_DELETION_THRESHOLD   20.0
-#define REGION_SOFT_CLIP_THRESHOLD  50.0
+// assuming a region size of 700 and ~125 reads in a region, a threshold of 0.016 equates to 2 reads in a region
+#define REGION_MISMATCH_THRESHOLD   0.016  // threshold for setting region mismatch state
+#define REGION_INSERTION_THRESHOLD  0.016  // threshold for setting region insertion state
+#define REGION_DELETION_THRESHOLD   0.016  // threshold for setting region deletion state
 
-#define FILTER_PF         (1<<0)
-#define FILTER_COVERAGE   (1<<1)
-#define FILTER_MISMATCH   (1<<2)
-#define FILTER_INSERTION  (1<<3)
-#define FILTER_DELETION   (1<<4)
-#define FILTER_SOFT_CLIP  (1<<5)
+#define TILE_REGION_THRESHOLD  0.75  // threshold for setting region state at tile level
 
-#define FILTER_MASK  (FILTER_INSERTION | FILTER_DELETION)	// treat reads with ANY indels as a QCFAIL
+#define REGION_STATE_MASK  (REGION_STATE_INSERTION | REGION_STATE_DELETION)  // region mask used to filter reads
 
 typedef struct {
 	char *cmdline;
@@ -175,6 +127,7 @@ typedef struct {
 	char *snp_file;
 	char *in_bam_file;
 	HashTable *snp_hash;
+	HashTable *tile_hash;
 	char *working_dir;
 	char *output;
 	int lane;
@@ -185,14 +138,20 @@ typedef struct {
 	int qcfail;
 	int tileViz;
 	int quiet;
+	int region_size;
 	int nregions_x;
 	int nregions_y;
 	int nregions;
 	int compress;
+	int width;
+	int height;
+	int region_min_count;
+	float region_mismatch_threshold;
+	float region_insertion_threshold;
+	float region_deletion_threshold;
 } Settings;
 
 static char *complement_table = NULL;
-static int tileArray[N_TILES];
 
 static void checked_chdir(const char *dir)
 {
@@ -202,32 +161,34 @@ static void checked_chdir(const char *dir)
 
 static void setRegions(Settings * s)
 {
-	char *file = NULL;
-	size_t file_sz = strlen(s->intensity_dir) + 30;
-	int fd = -1;
-	ssize_t res;
-	uint32_t width, height;
+	// if an intensity directory is given read the ImageSize.dat file to get the tile size
+	if (s->intensity_dir) {
+                char *file = NULL;
+                size_t file_sz = strlen(s->intensity_dir) + 30;
+                int fd = -1;
+                ssize_t res;
+                uint32_t width, height;
+		file = smalloc(file_sz);
+		snprintf(file, file_sz, "%s/../ImageSize.dat", s->intensity_dir);
+		fd = open(file, O_RDONLY);
+		if (fd < 0) die("Couldn't open %s : %s\n", file, strerror(errno));
+		res = read(fd, &width, 4);
+		if (4 != res) die("Error reading %s\n", file);
+		res = read(fd, &height, 4);
+		if (4 != res) die("Error reading %s\n", file);
+		s->width = width;
+		s->height = height;
+   	        if (!s->quiet) display("Read tile width=%u height=%u from file %s\n", s->width, s->height, file);
+		close(fd);
+	        free(file);
+	}
 
-	file = smalloc(file_sz);
-	snprintf(file, file_sz, "%s/../ImageSize.dat", s->intensity_dir);
-	fd = open(file, O_RDONLY);
-	if (fd < 0) die("Couldn't open %s : %s\n", file, strerror(errno));
+	s->nregions_x = 1 + (int)(s->width / s->region_size);
+	s->nregions_y = 1 + (int)(s->height / s->region_size);
 
-	res = read(fd, &width, 4);
-	if (4 != res) die("Error reading %s\n", file);
-	res = read(fd, &height, 4);
-	if (4 != res) die("Error reading %s\n", file);
-
-	close(fd);
-
-	s->nregions_x = 1 + (int)(width / REDUCTION_FACTOR);
-	s->nregions_y = 1 + (int)(height / REDUCTION_FACTOR);
 	s->nregions = s->nregions_x * s->nregions_y;
 
-	display("Read tile width=%u height=%u from file %s\n", width, height, file);
-	display("nregions_x=%d nregions_y=%d nregions=%d\n", s->nregions_x, s->nregions_y, s->nregions);
-
-	free(file);
+	if (!s->quiet) display("nregions_x=%d nregions_y=%d nregions=%d\n", s->nregions_x, s->nregions_y, s->nregions);
 
 	return;
 }
@@ -282,137 +243,82 @@ static void readSnpFile(Settings * s)
 	s->snp_hash = snp_hash;
 }
 
-static uint8_t *load_filter(Settings *s, char *file, size_t *nclusters)
-{
-	int fd = -1;
-	ssize_t res;
-	uint8_t *filter = NULL;
-
-	uint32_t check, version, nfilter;
-
-	fd = open(file, O_RDONLY);
-	if (fd < 0) {
-		die("Couldn't open %s : %s\n", file, strerror(errno));
-	}
-
-	res = read(fd, &check, 4);
-	if (4 != res) {
-		die("Error reading %s\n", file);
-	}
-	if (0 != check) {
-		die("Invalid filter file (%s) check=%ld expected 0\n", file,
-		    check);
-	}
-	res = read(fd, &version, 4);
-	if (4 != res) {
-		die("Error reading %s\n", file);
-	}
-	if (3 != version) {
-		die("Invalid filter file (%s) version=%ld expected 0\n", file,
-		    version);
-	}
-	res = read(fd, &nfilter, 4);
-	if (4 != res) {
-		die("Error reading %s\n", file);
-	}
-
-	filter = smalloc(nfilter * sizeof(uint8_t));
-
-	res = read(fd, filter, nfilter);
-	if (res < 0) {
-		die("Error reading %s: %s\n", file, strerror(errno));
-	}
-	if (res != nfilter) {
-		die("Error: Did not get the expected amount of data from %s\n", file);
-	}
-
-	*nclusters = nfilter;
-
-	return filter;
-}
-
 //
 // generate tileviz like summary plots for read number tileViz
 //
-static void displayTileViz(Settings *s, int ntiles, int itile)
+static void displayTileViz(Settings *s, int ntiles, int tile)
 {
-	die("The TileViz option is not yet implemented. Sorry\n");
-#if 0
-	int tile = tileArray[itile];
-	RegionTable *rt = rts[itile][0][0][0];	// FIXME
-	int read, read_length, irt, cycle, iregion;
+	HashItem *hashItem;
+	int itile;
+	int read = s->tileViz;
+	int *coverage  = smalloc(s->nregions * sizeof(int));
+	int *mismatch  = smalloc(s->nregions * sizeof(int));
+	int *insertion = smalloc(s->nregions * sizeof(int));
+	int *deletion  = smalloc(s->nregions * sizeof(int));
+        int cycle, iregion, i, j;
+	hashItem = HashTableSearch(s->tile_hash, (char *)&tile, sizeof(tile));
+	if (!hashItem) die("Can't find tile %d in tile_hash\n", tile);
+	itile = hashItem->data.i;
  
-	read = s->tileViz;
-	read_length = s->read_length[read];
-	irt = (read > 1 ? 1 : 0) * N_CYCLES;
-	for (cycle = 0; cycle < read_length; cycle++, irt++) {
-		RegionTable *cycle_rt = rts[itile];
-		for (iregion = 0; iregion < rt->nregions; iregion++) {
-			int n = cycle_rt->align[iregion]
-			    + cycle_rt->insertion[iregion]
-			    + cycle_rt->deletion[iregion]
-			    + cycle_rt->soft_clip[iregion]
-			    + cycle_rt->known_snp[iregion];
+        for (iregion = 0; iregion < s->nregions; iregion++) {
+            coverage[iregion] = 0;
+            mismatch[iregion]  = 0;
+            insertion[iregion] = 0;
+            deletion[iregion]  = 0;
+        }
 
-			// coverage should be the same for all cycles
-			rt->align[iregion] = n;
-
-			// for all other values take the maximum over all cycles
-			rt->mismatch[iregion] = max(rt->mismatch[iregion], cycle_rt->mismatch[iregion]);
-			rt->insertion[iregion] = max(rt->insertion[iregion], cycle_rt->insertion[iregion]);
-			rt->deletion[iregion] = max(rt->deletion[iregion], cycle_rt->deletion[iregion]);
-			rt->soft_clip[iregion] = max(rt->soft_clip[iregion], cycle_rt->soft_clip[iregion]);
-			rt->known_snp[iregion] = max(rt->known_snp[iregion], cycle_rt->known_snp[iregion]);
-		}
+        for (cycle = 0; cycle < s->read_length[read]; cycle++) {
+                for (iregion = 0; iregion < s->nregions; iregion++) {
+                        RegionTable *rt = getRTS(itile,iregion,read,cycle);
+                        int n = rt->align + rt->insertion + rt->deletion + rt->soft_clip + rt->known_snp;
+                        // correct for sparse bins by assuming ALL bins have atleast REGION_MIN_COUNT clusters
+ 	                n = max(n, s->region_min_count);
+                        // coverage should be the same for all cycles
+                        coverage[iregion] = n;
+                        // for all other values take the maximum over all cycles
+                        mismatch[iregion]  = max(mismatch[iregion],  rt->mismatch);
+                        insertion[iregion] = max(insertion[iregion], rt->insertion);
+                        deletion[iregion]  = max(deletion[iregion],  rt->deletion);
+    	        }
 	}
 
-	int i, j;
-
-	display ("tile=%-4d align          mismatch       insertion       deletion      soft_clip\n", tile);
+	display ("tile=%-4d coverage       mismatch       insertion      deletion\n", tile);
 	for (i = 0; i < s->nregions_y; i++) {
 		display("          ");
-		// truncate coverage to 15 so it displays as a single hex value
+                // truncate coverage to 15 so it displays as a single hex value
 		for (j = 0; j < s->nregions_x; j++) {
-			int k = j * s->nregions_y + i;
-			int v = rt->align[k] > 15 ? 15 : rt->align[k];
+			iregion = j * s->nregions_y + i;
+			int v = min(coverage[iregion], 15);
 			display("%1x", v);
 		}
 		display("    ");
 		// convert all other values to a percentage and bin 0(0%), 1(10%), .. 10(100%)
-		// correct for sparse bins by assuming ALL bins have atleast 10 clusters
+		// correct for sparse bins by assuming ALL bins have atleast REGION_MIN_COUNT clusters
 		for (j = 0; j < s->nregions_x; j++) {
-			int k = j * s->nregions_y + i;
-			int n = rt->align[k] < 10 ? 10 : rt->align[k];
-			int v = (int)(10.0 * rt->mismatch[k] / n);
+			iregion = j * s->nregions_y + i;
+			int v = (int)(10.0 * mismatch[iregion] / coverage[iregion]);
 			display("%1x", v);
 		}
 		display("    ");
 		for (j = 0; j < s->nregions_x; j++) {
-			int k = j * s->nregions_y + i;
-			int n = rt->align[k] < 10 ? 10 : rt->align[k];
-			int v = (int)(10.0 * rt->insertion[k] / n);
+			iregion = j * s->nregions_y + i;
+			int v = (int)(10.0 * insertion[iregion] / coverage[iregion]);
 			display("%1x", v);
 		}
 		display("    ");
 		for (j = 0; j < s->nregions_x; j++) {
-			int k = j * s->nregions_y + i;
-			int n = rt->align[k] < 10 ? 10 : rt->align[k];
-			int v = (int)(10.0 * rt->deletion[k] / n);
-			display("%1x", v);
-		}
-		display("    ");
-		for (j = 0; j < s->nregions_x; j++) {
-			int k = j * s->nregions_y + i;
-			int n = rt->align[k] < 10 ? 10 : rt->align[k];
-			int v = (int)(10.0 * rt->soft_clip[k] / n);
+			iregion = j * s->nregions_y + i;
+			int v = (int)(10.0 * deletion[iregion] / coverage[iregion]);
 			display("%1x", v);
 		}
 		display("\n");
 	}
 	display("\n");
 
-//	freeRegionTable(rt);
-#endif
+        free(coverage);
+        free(mismatch);
+        free(insertion);
+        free(deletion);
 }
 
 /*
@@ -422,43 +328,78 @@ static void displayTileViz(Settings *s, int ntiles, int itile)
 
 static void findBadRegions(Settings *s, int ntiles)
 {
-	int itile;
+	HashItem *hashItem;
 
 	if (0 >= ntiles)
 		return;
 
-	for (itile = 0; itile < ntiles; itile++) {
-		int read, cycle, iregion;
+	HashIter *iter = HashTableIterCreate();
+	while ((hashItem = HashTableIterNext(s->tile_hash, iter))) {
+		int tile = *(int*)(hashItem->key);
+		int itile = hashItem->data.i;
 
-		if (s->tileViz) displayTileViz(s,ntiles,itile);
+		if (s->tileViz) displayTileViz(s,ntiles,tile);
 
-		// for each region convert value to a simple pass/fail flag
-		for (iregion = 0; iregion < s->nregions; iregion++) {
-			for (read = 0; read < 3; read++) {
-				for (cycle = 0; cycle < s->read_length[read]; cycle++) {
-					RegionTable *rt = getRTS(itile,iregion,read ? 1 : 0,cycle);
-					// coverage - correct for sparse bins by assuming ALL bins have atleast 10 clusters
-					int n = max(rt->align, 10);
-					// align - mark bins with no coverage
-					rt->align = (rt->align ? 0 : 1);
-					// mismatch - mark bins with maximum mismatch rate > threshold
-					rt->mismatch = (100.0 * rt->mismatch / n) >= REGION_MISMATCH_THRESHOLD;
-					// insertion - mark bins with maximum insertion rate > threshold
-					rt->insertion = (100.0 * rt->insertion / n) >= REGION_INSERTION_THRESHOLD;
-					// deletion - mark bins with maximum deletion rate > threshold
-					rt->deletion = (100.0 * rt->deletion / n) >= REGION_DELETION_THRESHOLD;
-					// soft_clip - mark bins with maximum soft_clip rate > threshold
-					rt->soft_clip = (100.0 * rt->soft_clip / n) >= REGION_SOFT_CLIP_THRESHOLD;
-
+		int read;
+		for (read = 0; read < N_READS; read++) {
+			int cycle;
+			for (cycle = 0; cycle < s->read_length[read]; cycle++) {
+				// set the state for each region
+				int iregion;
+				for (iregion = 0; iregion < s->nregions; iregion++) {
+					RegionTable *rt = getRTS(itile,iregion,read,cycle);
 					rt->state = 0;
-					if (rt->align)     rt->state |= FILTER_COVERAGE;
-					if (rt->mismatch)  rt->state |= FILTER_MISMATCH;
-					if (rt->insertion) rt->state |= FILTER_INSERTION;
-					if (rt->deletion)  rt->state |= FILTER_DELETION;
-					if (rt->soft_clip) rt->state |= FILTER_SOFT_CLIP;
 
-//					if (state) fprintf(fp, "%d:%d:%d:%d:%d:%02x\n", lane, tile, iregion, read, cycle, state);
+   					// coverage
+					int n = rt->align + rt->insertion + rt->deletion + rt->soft_clip + rt->known_snp;
+
+					// coverage - mark spare bins
+					if (n < s->region_min_count) rt->state |= REGION_STATE_COVERAGE;
+
+					// correct for sparse bins by assuming ALL bins have atleast REGION_MIN_COUNT clusters
+					n = max(n, s->region_min_count);
+
+					// mismatch - mark bins with maximum mismatch rate > threshold
+					if (((float)rt->mismatch  / (float)n) >= s->region_mismatch_threshold)  rt->state |= REGION_STATE_MISMATCH;
+					// insertion - mark bins with maximum insertion rate > threshold
+					if (((float)rt->insertion / (float)n) >= s->region_insertion_threshold) rt->state |= REGION_STATE_INSERTION;
+					// deletion - mark bins with maximum deletion rate > threshold
+					if (((float)rt->deletion  / (float)n) >= s->region_deletion_threshold)  rt->state |= REGION_STATE_DELETION;
+					//if (rt->state) display("%d:%d:%d:%d:%d:%d\t%02x\n", s->lane, tileArray[itile], iregion, read, cycle, n, rt->state);
 				}
+				// ignoring low coverage, if all regions with a non-zero state have the same state and the
+                                // fraction of regions with this state exceeds a theshold set the state for the whole tile
+				int tile_state = -1, nregions = 0;
+				for (iregion = 0; iregion < s->nregions; iregion++) {
+					RegionTable *rt = getRTS(itile,iregion,read,cycle);
+					int state = rt->state & ~REGION_STATE_COVERAGE;
+					if (!state) continue;
+					if (tile_state == -1) tile_state = state;
+					if (state != tile_state) break;
+					nregions++;
+				}
+				if (iregion == s->nregions && (((float)nregions/(float)s->nregions) >= TILE_REGION_THRESHOLD))
+                                        for (iregion = 0; iregion < s->nregions; iregion++) {
+                                                RegionTable *rt = getRTS(itile,iregion,read,cycle);
+                                                rt->state = tile_state | (rt->state & REGION_STATE_COVERAGE);
+                                        }
+			        if (!s->quiet) {
+                                        int mismatch = 0, insertion = 0, deletion = 0, soft_clip = 0;
+                                        long quality_bases = 0, quality_errors = 0;
+                                        for (iregion = 0; iregion < s->nregions; iregion++) {
+                                                RegionTable *rt = getRTS(itile,iregion,read,cycle);
+                                                if (rt->state & REGION_STATE_MISMATCH)  mismatch++;
+                                                if (rt->state & REGION_STATE_INSERTION) insertion++;
+                                                if (rt->state & REGION_STATE_DELETION)  deletion++;
+                                                if (rt->state & REGION_STATE_SOFT_CLIP) soft_clip++;
+                                                quality_bases  += rt->align;
+                                                quality_errors += rt->mismatch;
+                                        }
+                                        float ssc = 1.0;
+                                        float quality = -10.0 * log10((quality_errors + ssc)/(quality_bases + ssc));
+                                        display("tile=%-4d read=%1d cycle=%-3d quality=%.2f mismatch=%-4d insertion=%-4d deletion=%-4d soft_clip=%-4d\n",
+                                                tile, read, cycle, quality, mismatch, insertion, deletion, soft_clip);
+                                }
 			}
 		}
 	}
@@ -468,16 +409,54 @@ static void findBadRegions(Settings *s, int ntiles)
 
 void printFilter(Settings *s, int ntiles, FILE *fp) 
 {
-	int itile;
-	for (itile = 0; itile < ntiles; itile++) {
-		int iregion;
-		for (iregion = 0; iregion < s->nregions; iregion++) {
-			int read;
-			for (read = 0; read < 3; read++) {
-				int cycle;
-				for (cycle = 0; cycle < s->read_length[read]; cycle++) {
-					RegionTable *rt = getRTS(itile,iregion,read ? 1 : 0,cycle);
-					if (rt->state) fprintf(fp, "%d:%d:%d:%d:%d:%02x\n", s->lane, tileArray[itile], iregion, read, cycle, rt->state);
+	int read, cycle, iregion;
+	Header hdr;
+	HashItem *hashItem;
+	int *tileArray;
+
+	// create the tile array from the tile hash
+	tileArray = smalloc(ntiles * sizeof(int));
+	HashIter *tileIter = HashTableIterCreate();
+	int i = 0;
+	while ((hashItem = HashTableIterNext(s->tile_hash, tileIter))) {
+		if (i>=ntiles) die("Too many tiles!\n");
+		tileArray[i++] = *(int*)hashItem->key;
+	}
+
+#ifdef BINARY_FILTER_FILE
+	hdr.region_magic = strdup(REGION_MAGIC);
+	hdr.coord_shift = COORD_SHIFT; 
+	hdr.coord_factor = COORD_FACTOR;
+	hdr.ntiles = ntiles;
+	hdr.tileArray = tileArray;
+	hdr.nreads = N_READS;
+	hdr.region_size = s->region_size;
+	hdr.nregions = s->nregions;
+	hdr.nregions_x = s->nregions_x;
+	hdr.nregions_y = s->nregions_y;
+	for (read=0; read < hdr.nreads; read++)
+		hdr.readLength[read] = s->read_length[read];
+	hdr.cmdLine = strdup(s->cmdline);
+	hdr.ncomments = 0;
+	writeHeader(fp,&hdr);
+#endif
+        
+	HashIter *iter = HashTableIterCreate();
+	while ((hashItem = HashTableIterNext(s->tile_hash, iter))) {
+#ifndef BINARY_FILTER_FILE
+		int tile = *(int*)(hashItem->key);
+#endif
+		int itile = hashItem->data.i;
+		for (read = 0; read < N_READS; read++) {
+			for (cycle = 0; cycle < s->read_length[read]; cycle++) {
+				for (iregion = 0; iregion < s->nregions; iregion++) {
+					RegionTable *rt = getRTS(itile,iregion,read,cycle);
+                                        int state = rt->state;
+#ifdef BINARY_FILTER_FILE
+					fputc(state, fp);
+#else
+					if (state) fprintf(fp, "%d:%d:%d:%d:%d:%02x\n", s->lane, tile, iregion, read, cycle, state);
+#endif
 				}
 			}
 		}
@@ -692,7 +671,7 @@ const char *parse_next_int(const char *str, int *val, const char *sep)
 /*
  * cts - parse bam file line
  *
- * returns 0 on success, 1 on expected failure.
+ * returns 0 on success, 1 on expected failure, 2 to ignore this entry.
  */
 static
 int
@@ -703,7 +682,6 @@ parse_bam_file_line_full(Settings *s,
 			 int *bam_tile,
 			 int *bam_x,
 			 int *bam_y,
-			 size_t *bam_offset,
 			 int *bam_read,
 			 char *read_seq,
 			 int *read_qual,
@@ -713,11 +691,11 @@ parse_bam_file_line_full(Settings *s,
 	char *name;
 	int32_t pos;
 	uint32_t *cigar;
-	uint8_t *ci_ptr, *seq, *qual, *m_ptr;
+	uint8_t *seq, *qual, *m_ptr;
 	char *mismatch = NULL;
 	const char *sep = ":#/", *sep2 = "ACGTN^";
 	const char *cp, *cp2;
-	int lane, tile, x, y, offset, read, i, j;
+	int lane, tile, x, y, read, i, j;
 	int skip = 0, clip, insert, delete;
 	HashItem *hi;
 
@@ -729,15 +707,14 @@ parse_bam_file_line_full(Settings *s,
 	if (0 > samread(fp, bam))
 		return 1;
 
-	if (BAM_FUNMAP & bam->core.flag)
+	if (BAM_FUNMAP & bam->core.flag) {
 		return 0;
+	}
 
 	lane = -1;
 	tile = -1;
 	x = -1;
 	y = -1;
-	offset = -1;
-	read = -1;
 
 	name = bam1_qname(bam);
 	cp = strchr(name, ':');
@@ -750,21 +727,6 @@ parse_bam_file_line_full(Settings *s,
 	cp = parse_next_int(cp, &x, sep);
 	cp = parse_next_int(cp, &y, sep);
 
-	/* look for ci tag */
-	ci_ptr = bam_aux_get(bam, "ci");
-	if (NULL == ci_ptr) {
-		/* no ci tag get offset from name */
-		cp = parse_next_int(cp, &offset, sep);
-		if (NULL == cp) {
-			die("ERROR: No ci tag and no offset in name: \"%s\"\n",
-			    name);
-		}
-	} else {
-		offset = bam_aux2i(ci_ptr);
-		/* name offset is 0 based but ci is 1 based */
-		offset--;
-	}
-
 	if (lane > N_LANES + 1 || lane < 1) {
 		die("ERROR: Invalid lane value in name: \"%s\"\n", name);
 	}
@@ -773,28 +735,29 @@ parse_bam_file_line_full(Settings *s,
 		die("ERROR: Invalid tile value in name: \"%s\"\n", name);
 	}
 
-	if (offset < 0) {
-		die("ERROR: Invalid offset value in name: \"%s\"\n", name);
-	}
-
+	read = 0;
 	if (BAM_FPAIRED & bam->core.flag) {
 		if (BAM_FREAD1 & bam->core.flag)
 			read = 1;
 		if (BAM_FREAD2 & bam->core.flag)
 			read = 2;
-		if (read == -1) {
+		if (read == 0) {
 			die("ERROR: Unable to determine read from flag %d for read: \"%s\"\n", bam->core.flag, name);
 		}
 	}
+
 #ifdef QC_FAIL
-	if (BAM_FQCFAIL & bam->core.flag)
+	if (BAM_FQCFAIL & bam->core.flag) {
 		return 0;
+}
 #endif
 
 #ifdef PROPERLY_PAIRED
-	if (BAM_FPAIRED & bam->core.flag)
-		if (0 == (BAM_FPROPER_PAIR & bam->core.flag))
+	if (BAM_FPAIRED & bam->core.flag) {
+		if (0 == (BAM_FPROPER_PAIR & bam->core.flag)) {
 			return 0;
+	}
+}
 #endif
 
 	pos = bam->core.pos;
@@ -957,7 +920,6 @@ parse_bam_file_line_full(Settings *s,
 	*bam_tile = tile;
 	*bam_x = x;
 	*bam_y = y;
-	*bam_offset = offset;
 	*bam_read = read;
 
 	return 0;
@@ -971,83 +933,69 @@ parse_bam_file_line_full(Settings *s,
 static
 int
 parse_bam_file_line(Settings *s,
-		    samfile_t *fp,
-		    bam1_t *bam,
-		    int *bam_lane,
-		    int *bam_tile, size_t * bam_offset, int *bam_read)
-{
+                    samfile_t *fp,
+                    bam1_t *bam,
+                    int *bam_lane,
+                    int *bam_tile,
+                    int *bam_x,
+                    int *bam_y,
+                    int *bam_read) {
 
-	char *name;
-	uint8_t *ci_ptr;
-	const char *sep = ":#/";
-	const char *cp;
-	int lane, tile, x, y, offset, read;
+    char *name;
+    const char *sep = ":#/";
+    const char *cp;
+    int lane, tile, x, y, read;
 
-	if (0 > samread(fp, bam))
-		return 1;
+    if( 0 > samread(fp, bam)) return 1;
+    
+    lane = -1;
+    tile = -1;
+    x = -1;
+    y = -1;
 
-	lane = -1;
-	tile = -1;
-	x = -1;
-	y = -1;
-	offset = -1;
-	read = -1;
+    name = bam1_qname(bam);
+    cp = strchr(name,':');
+    if(NULL == cp){
+        fprintf(stderr,"ERROR: Invalid run in name: \"%s\"\n",name);
+        exit(EXIT_FAILURE);
+    }
+    cp++;
+    cp = parse_next_int(cp,&lane,sep);
+    cp = parse_next_int(cp,&tile,sep);
+    cp = parse_next_int(cp,&x,sep);
+    cp = parse_next_int(cp,&y,sep);
 
-	name = bam1_qname(bam);
-	cp = strchr(name, ':');
-	if (NULL == cp) {
-		die("ERROR: Invalid run in name: \"%s\"\n", name);
-	}
-	cp++;
-	cp = parse_next_int(cp, &lane, sep);
-	cp = parse_next_int(cp, &tile, sep);
-	cp = parse_next_int(cp, &x, sep);
-	cp = parse_next_int(cp, &y, sep);
+    if(lane > N_LANES+1 || lane < 1){
+        fprintf(stderr,"ERROR: Invalid lane value in name: \"%s\"\n",name);
+        exit(EXIT_FAILURE);
+    }
 
-	/* look for ci tag */
-	ci_ptr = bam_aux_get(bam, "ci");
-	if (NULL == ci_ptr) {
-		/* no ci tag get offset from name */
-		cp = parse_next_int(cp, &offset, sep);
-		if (NULL == cp) {
-			die("ERROR: No ci tag and no offset in name: \"%s\"\n",
-			    name);
-		}
-	} else {
-		offset = bam_aux2i(ci_ptr);
-		/* name offset is 0 based but ci is 1 based */
-		offset--;
-	}
+    if(tile <= 0){
+        fprintf(stderr,"ERROR: Invalid tile value in name: \"%s\"\n",name);
+        exit(EXIT_FAILURE);
+    }
 
-	if (lane > N_LANES + 1 || lane < 1) {
-		die("ERROR: Invalid lane value in name: \"%s\"\n", name);
-	}
+    read = 0;
+    if(BAM_FPAIRED & bam->core.flag){
+        if(BAM_FREAD1 & bam->core.flag)
+            read = 1;
+        if(BAM_FREAD2 & bam->core.flag)
+            read = 2;
+        if(read == 0){
+            fprintf(stderr,"ERROR: Unable to determine read from flag %d for read: \"%s\"\n",bam->core.flag,name);
+            exit(EXIT_FAILURE);
+        }
+    }
 
-	if (tile <= 0) {
-		die("ERROR: Invalid tile value in name: \"%s\"\n", name);
-	}
+    *bam_lane = lane;
+    *bam_tile = tile;
+    *bam_x = x;
+    *bam_y = y;
+    *bam_read = read;
 
-	if (offset < 0) {
-		die("ERROR: Invalid offset value in name: \"%s\"\n", name);
-	}
-
-	if (BAM_FPAIRED & bam->core.flag) {
-		if (BAM_FREAD1 & bam->core.flag)
-			read = 1;
-		if (BAM_FREAD2 & bam->core.flag)
-			read = 2;
-		if (read == 0) {
-			die("ERROR: Unable to determine read from flag %d for read: \"%s\"\n", bam->core.flag, name);
-		}
-	}
-
-	*bam_lane = lane;
-	*bam_tile = tile;
-	*bam_offset = offset;
-	*bam_read = read;
-
-	return 0;
+    return 0;
 }
+
 
 /*
  * cts - parse bam file line
@@ -1070,15 +1018,11 @@ int dump_bam_file(Settings *s, samfile_t *fp_bam, size_t *nreads)
 	while (1) {
 		int bam_lane = -1, bam_tile = -1, bam_read = -1, bam_x =
 		    -1, bam_y = -1, read_length;
-		size_t bam_offset = 0;
 
 		if (0 != parse_bam_file_line_full(s, fp_bam, bam,
-						  &bam_lane, &bam_tile, &bam_x,
-						  &bam_y, &bam_offset,
-						  &bam_read, bam_read_seq,
-						  bam_read_qual,
-						  bam_read_mismatch,
-						  bam_read_buff_size)) {
+						  &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read,
+                                                  bam_read_seq, bam_read_qual, bam_read_mismatch,
+                                                  bam_read_buff_size)) {
 			break;
 		}
 
@@ -1165,11 +1109,10 @@ static void append_header_text(bam_header_t * header, char *text, int len)
 	header->text[header->l_text] = 0;
 }
 
-static void bam_header_add_pg(Settings *s, bam_header_t *bam_header)
+static void bam_header_add_pg(Settings *s, bam_header_t *bam_header, char *cl, char *id)
 {
 	char *text;
 	char *hl, *endl, *endt;
-	char *id = "pb_cal";
 	char *pn = "spatial_filter";
 	char *pp = NULL;
 	char *ds = "A program to apply a spatial filter";
@@ -1193,7 +1136,7 @@ static void bam_header_add_pg(Settings *s, bam_header_t *bam_header)
 		}
 		*endl = 0;
 		if (0 == memcmp(hl, "@PG", 3)) {
-			if (NULL == (pp = strstr(hl, "PN:"))) {
+			if (NULL == (pp = strstr(hl, "ID:"))) {
 				die("ERROR: No ID in PG line \"%s\"\n", hl);
 			}
 			pp += 3;
@@ -1204,22 +1147,18 @@ static void bam_header_add_pg(Settings *s, bam_header_t *bam_header)
 		hl = endl + 1;
 	}
 
-	pgsize =
-	    128 + strlen(pn) + strlen(pn) + strlen(ds) + strlen(PBP_VERSION) +
-	    strlen(s->cmdline);
+	pgsize = 128 + strlen(pn) + strlen(pn) + strlen(ds) + strlen(version) + strlen(cl);
 	if (NULL != pp) {
 		pgsize += strlen(pp);
 		pg = smalloc(pgsize);
 		pglen =
 		    snprintf(pg, pgsize,
-			     "@PG\tID:%s\tPN:%s\tPP:%s\tDS:%s\tVN:" PBP_VERSION
-			     "\tCL:%s\n", id, pn, pp, ds, s->cmdline);
+			     "@PG\tID:%s\tPN:%s\tPP:%s\tDS:%s\tVN:%s\tCL:%s\n", id, pn, pp, ds, version, cl);
 	} else {
 		pg = smalloc(pgsize);
 		pglen =
 		    snprintf(pg, pgsize,
-			     "@PG\tID:%s\tPN:%s\tDS:%s\tVN:" PBP_VERSION
-			     "\tCL:%s\n", pn, pn, ds, s->cmdline);
+			     "@PG\tID:%s\tPN:%s\tDS:%s\tVN:%s\tCL:%s\n", pn, pn, ds, version, cl);
 	}
 	assert(pglen < pgsize);
 
@@ -1232,16 +1171,12 @@ static void bam_header_add_pg(Settings *s, bam_header_t *bam_header)
 static int updateRegionTable(Settings *s, int itile, int read, int x, int y, int *read_mismatch)
 {
 
-	float x_coord = (x - COORD_SHIFT) / COORD_FACTOR;
-	float y_coord = (y - COORD_SHIFT) / COORD_FACTOR;
-	int iregion =
-	    (int)(x_coord / REDUCTION_FACTOR) * s->nregions_y +
-	    (int)(y_coord / REDUCTION_FACTOR);
+        int iregion = xy2region(x, y, s->region_size, s->nregions_x, s->nregions_y);
 	int cycle;
 
-	/* update region table */
+        /* update region table */
 	for (cycle = 0; cycle < s->read_length[read]; cycle++) {
-		RegionTable *rt = getRTS(itile,iregion,read,cycle);
+                RegionTable *rt = getRTS(itile,iregion,read,cycle);
 
 		if (read_mismatch[cycle] & BASE_INSERTION) rt->insertion++;
 		if (read_mismatch[cycle] & BASE_DELETION) rt->deletion++;
@@ -1268,6 +1203,7 @@ static int updateRegionTable(Settings *s, int itile, int read, int x, int y, int
  */
 void makeRegionTable(Settings *s, samfile_t *fp_bam, int *ntiles, size_t * nreads)
 {
+	HashData hd;
 	int lane = -1;
 	int tile = -1;
 
@@ -1279,23 +1215,21 @@ void makeRegionTable(Settings *s, samfile_t *fp_bam, int *ntiles, size_t * nread
 	int bam_read_qual[bam_read_buff_size];
 	int bam_read_mismatch[bam_read_buff_size];
 
+	s->tile_hash = HashTableCreate(N_TILES, HASH_DYNAMIC_SIZE | HASH_FUNC_JENKINS3);
+	if (!s->tile_hash) die("Failed to create tile_hash\n");
+
 	bam1_t *bam = bam_init1();
 
 	int itile = -1;
 
 	/* loop over reads in the bam file */
 	while (1) {
-		int bam_lane = -1, bam_tile = -1, bam_read = -1, bam_x =
-		    -1, bam_y = -1, read_length;
-		size_t bam_offset = 0;
+		int bam_lane = -1, bam_tile = -1, bam_read = -1, bam_x = -1, bam_y = -1, read_length;
 
 		if (0 != parse_bam_file_line_full(s, fp_bam, bam,
-						  &bam_lane, &bam_tile, &bam_x,
-						  &bam_y, &bam_offset,
-						  &bam_read, bam_read_seq,
-						  bam_read_qual,
-						  bam_read_mismatch,
-						  bam_read_buff_size)) {
+						  &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read,
+                                                  bam_read_seq, bam_read_qual, bam_read_mismatch,
+                                                  bam_read_buff_size)) {
 			break;
 		}
 
@@ -1304,10 +1238,8 @@ void makeRegionTable(Settings *s, samfile_t *fp_bam, int *ntiles, size_t * nread
 			continue;
 
 		if (0 == s->read_length[bam_read]) {
-			if (read_length >= N_CYCLES) {
-				die("ERROR: too many cycles for read %d " "in bam file %d > %d.\n", bam_read, read_length, N_CYCLES);
-			}
 			s->read_length[bam_read] = read_length;
+   	                initRTS(N_TILES, s->nregions, bam_read, read_length);
 		}
 		if (s->read_length[bam_read] != read_length) {
 			die("Error: inconsistent read lengths within bam file for read %d.\nHave length %ld, previously it was %d.\n",
@@ -1322,27 +1254,21 @@ void makeRegionTable(Settings *s, samfile_t *fp_bam, int *ntiles, size_t * nread
 			die("Error: Inconsistent lane within bam file.\nHave %d, previously it was %d.\n", bam_lane, lane);
 		}
 
-		if (bam_tile != tile) {
-			tile = bam_tile;
-
-			if (!s->quiet)
-				display("Processing tile %i (%lu)\n", tile, nreads_bam);
-
-			for (itile = 0; itile < ntiles_bam; itile++)
-				if (tile == tileArray[itile]) {
-					die("ERROR: alignments are not sorted by tile.\n");
-				}
-
-			tileArray[ntiles_bam] = tile;
-			ntiles_bam++;
-			if (ntiles_bam >= N_TILES) {
-				die("ERROR: too many tiles %d > %d.\n", ntiles_bam, N_TILES);
-			}
-
+		// lookup itile from tile in tile hash
+		HashItem *tileItem = HashTableSearch(s->tile_hash, (char *)&bam_tile, sizeof(bam_tile));
+		if (tileItem) {
+			// if tile found, extract itile
+			itile = tileItem->data.i;
+		} else {
+			// if tile not found in hash, add it
+			hd.i = ntiles_bam++;
+			if (HashTableAdd(s->tile_hash, (char *)&bam_tile, sizeof(bam_tile), hd, NULL) == NULL)
+				die("Failed to add tile %d to tile_hash\n", bam_tile);
+			if (!s->quiet) display("Processing tile %i (%lu)\n", bam_tile, nreads_bam);
+			itile = hd.i;
 		}
 
-
-		if (0 != updateRegionTable(s, itile, bam_read ? 1 : 0, bam_x, bam_y, bam_read_mismatch)) {
+                if (0 != updateRegionTable(s, itile, bam_read, bam_x, bam_y, bam_read_mismatch)) {
 			die("ERROR: updating quality values for tile %i.\n", tile);
 		}
 		nreads_bam++;
@@ -1369,30 +1295,19 @@ void makeRegionTable(Settings *s, samfile_t *fp_bam, int *ntiles, size_t * nread
 int filter_bam(Settings * s, samfile_t * fp_in_bam, samfile_t * fp_out_bam,
 	       size_t * nreads, size_t * nfiltered)
 {
-	char *file = NULL;
-	size_t file_sz = strlen(s->filter);
-	size_t nfilter = 0;
-	uint8_t *filter = NULL;
-
-	int tiles[N_TILES];
-
 	int lane = -1;
-	int tile = -1;
-
-	int ntiles_bam = 0;
 	size_t nreads_bam = 0;
 	int nfiltered_bam = 0;
 
-	bam1_t *bam = bam_init1();
 
-	file = smalloc(file_sz);
+	bam1_t *bam = bam_init1();
 
 	/* loop over reads in the input bam file */
 	while (1) {
-		int bam_lane = -1, bam_tile = -1, bam_read = -1, read_length;
-		size_t bam_offset = 0;
+		int bam_lane = -1, bam_tile = -1, bam_read = -1, read_length, bam_x=-1, bam_y=-1;
 
-		if (0 != parse_bam_file_line(s, fp_in_bam, bam, &bam_lane, &bam_tile, &bam_offset, &bam_read)) {
+		if (0 != parse_bam_file_line(s, fp_in_bam, bam,
+                                             &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read)) {
 			break;
 		}
 
@@ -1416,59 +1331,35 @@ int filter_bam(Settings * s, samfile_t * fp_in_bam, samfile_t * fp_out_bam,
 			die("Error: Inconsistent lane: Bam lane %d qseq lane %d.\n", bam_lane, lane);
 		}
 
-		if (bam_tile != tile) {
-			int itile;
-
-			tile = bam_tile;
-
-			if (!s->quiet)
-				display("Processing tile %i (%lu)\n", tile, nreads_bam);
-
-			for (itile = 0; itile < ntiles_bam; itile++)
-				if (tile == tiles[itile]) {
-					die("ERROR: alignments are not sorted by tile.\n");
-				}
-
-			ntiles_bam++;
-			if (ntiles_bam > N_TILES) {
-				die("ERROR: too many tiles %d > %d.\n", ntiles_bam, N_TILES);
-			}
-
-			tiles[itile] = tile;
-
-			if (NULL != filter)
-				free(filter);
-
-//			snprintf(file, file_sz, "%s/%s_%04d.filter", s->working_dir, s->prefix, tile);
-			filter = load_filter(s, file, &nfilter);
-		}
-
-		assert(bam_offset < nfilter);
-
-		if (filter[bam_offset] & FILTER_MASK) {
-			nfiltered_bam++;
-
-			if (s->qcfail) {
-				bam->core.flag |= BAM_FQCFAIL;
-			} else {
-				continue;
-			}
-		}
-
-		if (0 > samwrite(fp_out_bam, bam)) {
-			die("Error: writing bam file\n");
-		}
-
 		nreads_bam++;
+
+		char state = 0, bad_cycle_count = 0;
+		int iregion = xy2region(bam_x, bam_y, s->region_size, s->nregions_x, s->nregions_y);
+		int read;
+		for (read = 0; read < N_READS; read++) {
+			int cycle;
+			for (cycle = 0; cycle < s->read_length[read]; cycle++) {
+				state = getFilterData(bam_tile, read, cycle, iregion);
+				if (state & REGION_STATE_MASK)
+                                        bad_cycle_count++;
+  		        }
+		}
+
+                if (bad_cycle_count) {
+                        nfiltered_bam++;
+ 		        if (s->qcfail) 
+                                bam->core.flag |= BAM_FQCFAIL;
+                        else
+                                continue;
+                }
+
+		if (0 > samwrite(fp_out_bam, bam)) die("Error: writing bam file\n");
 	}
 
 	*nreads = nreads_bam;
 	*nfiltered = nfiltered_bam;
 
 	bam_destroy1(bam);
-
-	if (NULL != filter)
-		free(filter);
 
 	return 0;
 }
@@ -1501,36 +1392,67 @@ static void usage(int code)
 {
 	FILE *usagefp = stderr;
 
-	fprintf(usagefp, "spatial_filter v" PBP_VERSION "\n\n");
+	fprintf(usagefp, "spatial_filter v%s\n\n", version);
 	fprintf(usagefp,
 		"Usage: spatial_filter [command] [options] bam_file\n"
 		"" "  calculate or apply a spatial filter\n" "");
 	fprintf(usagefp, "  command must be one of:\n");
 	fprintf(usagefp, "    -d         just dump bam file in 'mismatch' format\n");
+	fprintf(usagefp, "    -D         just dump filter file in ascii text format to stdout\n");
 	fprintf(usagefp, "    -c         calculate filter files\n");
 	fprintf(usagefp, "    -a         apply filter files\n");
+	fprintf(usagefp, "    -v         display version and exit\n");
 	fprintf(usagefp, "\n");
 	fprintf(usagefp, "  options:\n");
-	fprintf(usagefp, "    -i --intensity-dir dir\n");
-	fprintf(usagefp, "               Intensity directory\n");
-	fprintf(usagefp, "               no default: must be supplied\n");
-	fprintf(usagefp, "    -F --filter filter filename\n");
-	fprintf(usagefp, "               filter filename e.g. 8088.filter\n");
-	fprintf(usagefp, "               no default: must be supplied\n");
-	fprintf(usagefp, "    -o         output\n");
-	fprintf(usagefp, "               Output bam file name\n");
-	fprintf(usagefp, "               no default: must be supplied\n");
-	fprintf(usagefp, "    -s --snp_file file\n");
-	fprintf(usagefp, "               set of snps to be removed\n");
-	fprintf(usagefp, "               file in Reference Ordered Data (ROD) format\n");
-	fprintf(usagefp, "    -f         mark filtered reads as QCFAIL\n");
-	fprintf(usagefp, "               default: do not output filtered read\n");
-	fprintf(usagefp, "    -u         do not compress the output bam file\n");
-	fprintf(usagefp, "               default: compress\n");
-	fprintf(usagefp, "    -t --tileviz read\n");
-	fprintf(usagefp, "               generate tileviz like summary plots for read number\n");
 	fprintf(usagefp, "    -q         Quiet\n");
 	fprintf(usagefp, "               Inhibit all progress messages\n");
+	fprintf(usagefp, "\n");
+	fprintf(usagefp, "  comand specific options:\n");
+	fprintf(usagefp, "\n");
+	fprintf(usagefp, "    dump bam file:\n");
+	fprintf(usagefp, "      none:\n");
+	fprintf(usagefp, "\n");
+	fprintf(usagefp, "    all other commands require:\n");
+	fprintf(usagefp, "      -F --filter file\n");
+	fprintf(usagefp, "                  Filter filename e.g. 8088.filter\n");
+	fprintf(usagefp, "                  no default: must be supplied\n");
+	fprintf(usagefp, "\n");
+	fprintf(usagefp, "    calculate filter:\n");
+	fprintf(usagefp, "      -width width\n");
+	fprintf(usagefp, "                 Tile width\n");
+	fprintf(usagefp, "      -height height\n");
+	fprintf(usagefp, "                 Tile height\n");
+        fprintf(usagefp, "      -i --intensity-dir dir\n");
+        fprintf(usagefp, "                 Intensity directory\n");
+        fprintf(usagefp, "                 required unless tile width and height are supplied\n");
+	fprintf(usagefp, "      -s --snp_file file\n");
+	fprintf(usagefp, "                 set of snps to be removed\n");
+	fprintf(usagefp, "                 file in Reference Ordered Data (ROD) format\n");
+	fprintf(usagefp, "      -t --tileviz read\n");
+	fprintf(usagefp, "                 generate tileviz like summary plots for read number\n");
+	fprintf(usagefp, "      --region_size\n");
+	fprintf(usagefp, "                 default %d\n", REGION_SIZE);
+	fprintf(usagefp, "      --region_min_count\n");
+	fprintf(usagefp, "                 minimum coverage when setting region state\n");
+	fprintf(usagefp, "                 default %d\n", REGION_MIN_COUNT);
+	fprintf(usagefp, "      --region_mismatch_threshold\n");
+	fprintf(usagefp, "                 threshold for setting region mismatch state\n");
+	fprintf(usagefp, "                 default %-6.4f\n", REGION_MISMATCH_THRESHOLD);
+	fprintf(usagefp, "      --region_insertion_threshold\n");
+	fprintf(usagefp, "                 threshold for setting region insertion state\n");
+	fprintf(usagefp, "                 default %-6.4f\n", REGION_INSERTION_THRESHOLD);
+	fprintf(usagefp, "      --region_deletion_threshold\n");
+	fprintf(usagefp, "                 threshold for setting region deletion state\n");
+	fprintf(usagefp, "                 default %-6.4f\n", REGION_DELETION_THRESHOLD);
+	fprintf(usagefp, "\n");
+	fprintf(usagefp, "    apply filter:\n");
+	fprintf(usagefp, "      -o         output\n");
+	fprintf(usagefp, "                 Output bam file name\n");
+	fprintf(usagefp, "                 default: stdout\n");
+	fprintf(usagefp, "      -u         do not compress the output bam file\n");
+	fprintf(usagefp, "                 default: compress\n");
+	fprintf(usagefp, "      -f         mark filtered reads as QCFAIL\n");
+	fprintf(usagefp, "                 default: do not output filtered read\n");
 	fprintf(usagefp, "\n");
 
 	exit(code);
@@ -1575,10 +1497,14 @@ void calculateFilter(Settings *s)
 		die("ERROR: can't open bam file file %s: %s\n", s->in_bam_file, strerror(errno));
 	}
 
-	fp_filter = fopen(s->filter, "w+");
+        if( NULL == s->filter) {
+                display("Writing filter to stdout\n");
+                s->filter = "/dev/stdout";
+        }
+
+        fp_filter = fopen(s->filter, "w+");
 	if (!fp_filter) die("Can't open filter file %s: %s\n", s->filter, strerror(errno));
 
-	initRTS(N_TILES, s->nregions, N_READS, N_CYCLES);
 	makeRegionTable(s, fp_input_bam, &ntiles, &nreads);
 
 	/* close the bam file */
@@ -1616,45 +1542,57 @@ void applyFilter(Settings *s)
 	char out_mode[5] = "wb";
 	char *out_bam_file = NULL;
 	bam_header_t *out_bam_header = NULL;
-		size_t nreads = 0;
-		size_t nfiltered = 0;
+	size_t nreads = 0;
+	size_t nfiltered = 0;
+	Header hdr;
+	FILE *fp;
 
-		if (0 == s->compress)
-			strcat(out_mode, "u");
+	fp = fopen(s->filter, "rb");
+	if (!fp) die("Can't open filter file %s\n", s->filter);
+	readHeader(fp, &hdr);
+	readFilterData(fp, &hdr);
+	fclose(fp);
 
-		fp_input_bam = samopen(s->in_bam_file, "rb", 0);
-		if (NULL == fp_input_bam) {
-			die("ERROR: can't open bam file file %s: %s\n", s->in_bam_file, strerror(errno));
-		}
+	s->region_size = hdr.region_size;
+	s->nregions_x = hdr.nregions_x;
+	s->nregions_y = hdr.nregions_y;
 
-		out_bam_header = bam_header_dup(fp_input_bam->header);
-		bam_header_add_pg(s, out_bam_header);
+	if (0 == s->compress)
+		strcat(out_mode, "u");
 
-		out_bam_file =
-		    (NULL == s->output ? aprintf("/dev/stdout") : aprintf("%s/%s", s->working_dir, s->output));
-		fp_output_bam = samopen(out_bam_file, out_mode, out_bam_header);
-		if (NULL == fp_output_bam) {
-			die("ERROR: can't open bam file file %s: %s\n", out_bam_file, strerror(errno));
-		}
-		free(out_bam_file);
+	fp_input_bam = samopen(s->in_bam_file, "rb", 0);
+	if (NULL == fp_input_bam) {
+		die("ERROR: can't open bam file file %s: %s\n", s->in_bam_file, strerror(errno));
+	}
 
-		bam_header_destroy(out_bam_header);
+	out_bam_header = bam_header_dup(fp_input_bam->header);
+	bam_header_add_pg(s, out_bam_header, hdr.cmdLine, "spfc");
+	bam_header_add_pg(s, out_bam_header, s->cmdline, "spfa");
 
-		if (-1 == filter_bam(s, fp_input_bam, fp_output_bam, &nreads, &nfiltered)) {
-			die("ERROR: failed to filter bam file %s\n", s->in_bam_file);
-		}
+	out_bam_file = (NULL == s->output ? aprintf("/dev/stdout") : aprintf("%s/%s", s->working_dir, s->output));
+	fp_output_bam = samopen(out_bam_file, out_mode, out_bam_header);
+	if (NULL == fp_output_bam) {
+		die("ERROR: can't open bam file file %s: %s\n", out_bam_file, strerror(errno));
+	}
+	free(out_bam_file);
 
-		samclose(fp_input_bam);
-		samclose(fp_output_bam);
+	bam_header_destroy(out_bam_header);
 
-		display("Processed %8lu traces\n", nreads);
-		display("Filtered %8lu traces\n", nfiltered);
+	if (-1 == filter_bam(s, fp_input_bam, fp_output_bam, &nreads, &nfiltered)) {
+		die("ERROR: failed to filter bam file %s\n", s->in_bam_file);
+	}
 
-		/* back to where we belong */
-		checked_chdir(s->working_dir);
+	samclose(fp_input_bam);
+	samclose(fp_output_bam);
+
+	if (!s->quiet) display("Processed %8lu traces\n", nreads);
+	if (!s->quiet) display("%s %8lu traces\n", (s->qcfail ? "QC failed" : "Removed"), nfiltered);
+
+	/* back to where we belong */
+	checked_chdir(s->working_dir);
 }
 
-int dumpBAM(Settings *s)
+void dumpBAM(Settings *s)
 {
 	samfile_t *fp_input_bam;
 		size_t nreads = 0;
@@ -1674,20 +1612,46 @@ int dumpBAM(Settings *s)
 		if (!s->quiet) {
 			display("Dumped %8lu traces\n", nreads);
 		}
-
-		if (NULL != s->working_dir)
-			free(s->working_dir);
-
-		return EXIT_SUCCESS;
 }
+
+void dumpFilterFile(char *filename)
+{
+	FILE *fp;
+	Header hdr;
+	int i;
+
+	if (!filename) die("dumpFilterFile: no filter filename given\n");
+	fp = fopen(filename, "r");
+	if (!fp) die("dumpFilterFile: Can't open file %s\n", filename);
+	readHeader(fp,&hdr);
+	printf("Magic:          %s\n", hdr.region_magic);
+	printf("Coord Shift:    %-5d\n", hdr.coord_shift);
+	printf("Coord Factor:   %-5d\n", hdr.coord_shift);
+	printf("Region Size:    %-5d\n", hdr.region_size);
+	printf("Num Regions:    %-5d\n", hdr.nregions);
+	printf("Num Tiles:      %-5d\n", hdr.ntiles);
+	for (i=0; i < hdr.ntiles; i++) printf("%-5d ", hdr.tileArray[i]);
+	printf("\n");
+	printf("Read Length:    ");
+	for (i=0; i < hdr.nreads; i++) printf("%-5d ", hdr.readLength[i]);
+	printf("\n");
+	printf("Command Line:   %s\n", hdr.cmdLine);
+	for (i=0; i < hdr.ncomments; i++) {
+		if (i) printf("                %s\n", hdr.comments[i]);
+		else   printf("Comments:       %s\n", hdr.comments[i]);
+	}
+	fclose(fp);
+}
+
 
 int main(int argc, char **argv)
 {
-
 	Settings settings;
 	const char *override_intensity_dir = NULL;
+	int dumpFilter = 0;
+	char *cmd = NULL;
 
-	settings.filter = "/dev/stdout";
+	settings.filter = NULL;
 	settings.tileViz = 0;
 	settings.quiet = 0;
 	settings.dump = 0;
@@ -1697,36 +1661,55 @@ int main(int argc, char **argv)
 	settings.intensity_dir = NULL;
 	settings.snp_file = NULL;
 	settings.snp_hash = NULL;
+	settings.tile_hash = NULL;
 	settings.output = NULL;
 	settings.in_bam_file = NULL;
 	settings.read_length[0] = 0;
 	settings.read_length[1] = 0;
 	settings.read_length[2] = 0;
 	settings.working_dir = NULL;
+	settings.region_size = REGION_SIZE;
+	settings.width = 0;
+	settings.height = 0;
 	settings.nregions_x = 0;
 	settings.nregions_y = 0;
 	settings.nregions = 0;
 	settings.compress = 1;
-
-	settings.cmdline = get_command_line(argc, argv);
+	settings.region_min_count = REGION_MIN_COUNT;
+	settings.region_mismatch_threshold = REGION_MISMATCH_THRESHOLD;
+	settings.region_insertion_threshold = REGION_INSERTION_THRESHOLD;
+	settings.region_deletion_threshold = REGION_DELETION_THRESHOLD;
 
 	static struct option long_options[] = {
                    {"intensity_dir", 1, 0, 'i'},
                    {"intensity-dir", 1, 0, 'i'},
-                   {"snp_file", 0, 0, 's'},
-                   {"snp-file", 0, 0, 's'},
-                   {"tileviz", 0, 0, 't'},
+                   {"snp_file", 1, 0, 's'},
+                   {"snp-file", 1, 0, 's'},
+                   {"tileviz", 1, 0, 't'},
                    {"help", 0, 0, 'h'},
-                   {"filter", 0, 0, 'F'},
+                   {"filter", 1, 0, 'F'},
+                   {"width", 1, 0, 'x'},
+                   {"height", 1, 0, 'y'},
+                   {"version", 0, 0, 'v'},
+                   {"region_min_count", 1, 0, 'm'},
+                   {"region-size", 1, 0, 'r'},
+                   {"region_size", 1, 0, 'r'},
+                   {"region_mismatch_threshold", 1, 0, 'z'},
+                   {"region_insertion_threshold", 1, 0, 'b'},
+                   {"region_deletion_threshold", 1, 0, 'e'},
                    {0, 0, 0, 0}
                };
 
-	char c;
-	while ( (c = getopt_long(argc, argv, "dcafuo:i:p:s:t:qh?", long_options, 0)) != -1) {
+	int ncmd = 0;
+        char c;
+	while ( (c = getopt_long(argc, argv, "vdcafuDF:b:e:o:i:m:p:s:r:x:y:t:z:qh?", long_options, 0)) != -1) {
 		switch (c) {
-			case 'd':	settings.dump = 1; break;
-			case 'c':	settings.calculate = 1;		break;
-			case 'a':	settings.apply = 1;			break;
+			case 'v':	display("spatial_filter: Version %s\n", version); 
+						exit(0);
+                        case 'd':	settings.dump = 1; ncmd++; break;
+			case 'D':	dumpFilter = 1; ncmd++; break;
+			case 'c':	settings.calculate = 1; ncmd++; break;
+			case 'a':	settings.apply = 1; ncmd++; break;
 			case 't':	parse_next_int(optarg,&settings.tileViz,NULL);	break;
 			case 'f':	settings.qcfail = 1;		break;
 			case 'u':	settings.compress = 0;		break;
@@ -1734,6 +1717,13 @@ int main(int argc, char **argv)
 			case 'i':	override_intensity_dir = optarg;	break;
 			case 's':	settings.snp_file = optarg;	break;
 			case 'F':	settings.filter = optarg;	break;
+			case 'x':	settings.width = atoi(optarg);	break;
+			case 'y':	settings.height = atoi(optarg);	break;
+			case 'r':	settings.region_size = atoi(optarg); break;
+			case 'm':	settings.region_min_count = atoi(optarg); break;
+			case 'z':	settings.region_mismatch_threshold = atof(optarg); break;
+			case 'b':	settings.region_insertion_threshold = atof(optarg); break;
+			case 'e':	settings.region_deletion_threshold = atof(optarg); break;
 			case 'q':	settings.quiet = 1;			break;
 			case 'h':
 			case '?':	usage(0);					break;
@@ -1743,9 +1733,73 @@ int main(int argc, char **argv)
 		}
 	}
 
+	if (ncmd > 1) {
+	        display("ERROR: More than one command specified\n", c);
+		usage(1);
+        }
+
 	if (optind < argc) settings.in_bam_file = argv[optind];
 
-	if (!settings.in_bam_file) die("No BAM file specified\n");
+	if (!settings.in_bam_file && !dumpFilter) die("Error: no BAM file specified\n");
+
+        if (!settings.filter && (dumpFilter || settings.apply)) die("Error: no filter file specified\n");
+
+	if (settings.calculate && (!override_intensity_dir && (!settings.width || !settings.height)))
+                die("ERROR: you must specify an intensity dir or Width and Height\n");
+
+        if (!settings.width < 0) die("Error: invalid tile width");
+	if (!settings.height < 0) die("Error: invalid tile height");
+	if (!settings.region_size < 0) die("Error: invalid region size");
+
+	// create pseudo command line
+	if (settings.calculate) {
+		char arg[64];
+		cmd = smalloc(2048);
+		strcat(cmd, argv[0]);
+		strcat(cmd, " -c ");
+		if (override_intensity_dir)              { strcat(cmd, " -i "); strcat(cmd, override_intensity_dir); }
+		if (settings.snp_file)                   { strcat(cmd, " -s "); strcat(cmd, settings.snp_file); }
+		if (settings.filter)                     { strcat(cmd, " -F "); strcat(cmd, settings.filter); }
+		if (settings.width)                      { snprintf(arg, 64, " -width %d", settings.width);
+                                                           strcat(cmd, arg); }
+		if (settings.height)                     { snprintf(arg, 64, " -height %d", settings.height);
+                                                           strcat(cmd, arg); }
+		if (settings.region_size)                { snprintf(arg, 64, " -region_size %d", settings.region_size);
+                                                           strcat(cmd, arg); }
+		if (settings.region_min_count)           { snprintf(arg, 64, " -region_min_count %d", settings.region_min_count);
+                                                           strcat(cmd, arg); }
+		if (settings.region_mismatch_threshold)  { snprintf(arg, 64, " -region_mismatch_threshold %-6.4f", settings.region_mismatch_threshold);
+                                                           strcat(cmd, arg); }
+		if (settings.region_insertion_threshold) { snprintf(arg, 64, " -region_insertion_threshold %-6.4f", settings.region_insertion_threshold);
+                                                           strcat(cmd, arg); }
+		if (settings.region_deletion_threshold)  { snprintf(arg, 64, " -region_deletion_threshold %-6.4f", settings.region_deletion_threshold);
+                                                           strcat(cmd, arg); }
+		strcat(cmd, " ");
+		strcat(cmd, settings.in_bam_file);
+		if (strlen(cmd) > 2047) die("Command line too big");
+	}
+	if (settings.apply) {
+		cmd = smalloc(2048);
+		strcat(cmd, argv[0]);
+		strcat(cmd, " -a ");
+		if (settings.qcfail)   { strcat(cmd, " -f "); }
+		if (settings.compress) { strcat(cmd, " -u "); }
+		if (settings.output)   { strcat(cmd, " -o "); strcat(cmd, settings.output); }
+		if (settings.filter)   { strcat(cmd, " -F "); strcat(cmd, settings.filter); }
+		strcat(cmd, " ");
+		if (settings.in_bam_file) strcat(cmd, settings.in_bam_file);
+		if (strlen(cmd) > 2047) die("Command line too big");
+	}
+
+	if (!settings.quiet) display("Cmd: %s\n", cmd);
+	settings.cmdline = cmd;
+
+        if (override_intensity_dir) {
+                settings.intensity_dir = get_real_path_name(override_intensity_dir);
+                if (NULL == settings.intensity_dir) {
+                        die("ERROR: can't process intensity dir: %s\n", override_intensity_dir);
+                }
+        }
 
 	/* preserve starting directory */
 	settings.working_dir = getcwd(NULL,0);
@@ -1753,41 +1807,32 @@ int main(int argc, char **argv)
 		die("ERROR: can't obtain working directory: %s\n", strerror(errno));
 	}
 
-	/* read the snp_file */
-	if (NULL != settings.snp_file) {
-		readSnpFile(&settings);
-		if (NULL == settings.snp_hash) {
-			die("ERROR: reading snp file %s\n", settings.snp_file);
-		}
-	}
-
 	/* dump the alignments */
-	if (settings.dump) return dumpBAM(&settings);
+	if (settings.dump) dumpBAM(&settings);
 
-	/* get absolute intensity dir */
-	if (override_intensity_dir) {
-		settings.intensity_dir = get_real_path_name(override_intensity_dir);
-		if (NULL == settings.intensity_dir) {
-			die("ERROR: can't process intensity dir: %s\n", override_intensity_dir);
-		}
-	} else {
-		die("ERROR: you must specify an intensity dir\n");
-	}
-
-	/* set the number of regions by reading the intensity file */
-	setRegions(&settings);
-	if (0 > settings.nregions) {
-		die("ERROR: invalid tile size\n");
-	}
+	/* Dump the filter file */
+	if (dumpFilter) dumpFilterFile(settings.filter);
 
 	/* calculate the filter */
-	if (settings.calculate) calculateFilter(&settings);
+        if (settings.calculate) {
+                /* set the number of regions */
+                setRegions(&settings);
+
+                /* read the snp_file */
+                if (NULL != settings.snp_file) {
+                        readSnpFile(&settings);
+                        if (NULL == settings.snp_hash) {
+                                die("ERROR: reading snp file %s\n", settings.snp_file);
+                        }
+                }
+
+                calculateFilter(&settings);
+        }
 
 	/* apply the  filter */
 	if (settings.apply) applyFilter(&settings);
 
-	if (NULL != settings.working_dir)
-		free(settings.working_dir);
+	if (NULL != settings.working_dir) free(settings.working_dir);
 
 	return EXIT_SUCCESS;
 
