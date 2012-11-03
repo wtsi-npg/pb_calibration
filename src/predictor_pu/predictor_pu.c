@@ -97,7 +97,6 @@
 #define N_STATES 2
 
 #define PHRED_QUAL_OFFSET 33  // phred quality values offset
-#define ILL_QUAL_OFFSET   64  // illumina quality values offset
 
 typedef struct {
     int         tile;
