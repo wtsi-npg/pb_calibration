@@ -430,18 +430,18 @@ static void findBadTiles(Settings *s, int ntiles, SurvTable **sts)
                     st->status = ST_STATUS_BAD;
             }
 
-#if 1
-            fprintf(stderr, "read=%1d cycle=%-3d qavg=%.2f qstd=%.2f qmax=%.2f qmin=%.2f ", read, cycle, qavg, qstd, qmax, qmin);
-            for(itile=0;itile<ntiles;itile++) {
-                SurvTable *st = sts[itile*N_READS+read] + cycle;
-                if (st->status == ST_STATUS_GOOD )
-                    fprintf(stderr, "%4d  %5.2f ", st->tile, st->quality);
-                else
-                    // mark poor or bad tiles
-                    fprintf(stderr, "%4d* %5.2f ", st->tile, st->quality);
+            if (!s->quiet) {
+                display("read=%1d cycle=%-3d qavg=%.2f qstd=%.2f qmax=%.2f qmin=%.2f ", read, cycle, qavg, qstd, qmax, qmin);
+                for(itile=0;itile<ntiles;itile++) {
+                    SurvTable *st = sts[itile*N_READS+read] + cycle;
+                    if (st->status == ST_STATUS_GOOD )
+                        display("%4d  %5.2f ", st->tile, st->quality);
+                    else
+                        // mark poor or bad tiles
+                        display("%4d* %5.2f ", st->tile, st->quality);
+                }
+                display("\n");
             }
-            fprintf(stderr, "\n");
-#endif
         }
 
     return;
@@ -649,7 +649,7 @@ static void optimisePurityBins(Settings *s, SurvTable *st, CalTable *ct)
     ipbin = 0;
     purity_bins[npurity_bins++] = st->purity[ipbin];
 #if 0
-    fprintf(stderr,"1: npurity_bins=%d ipbin=%d purity=%f\n", npurity_bins, ipbin, st->purity[ipbin]);
+    display("1: npurity_bins=%d ipbin=%d purity=%f\n", npurity_bins, ipbin, st->purity[ipbin]);
 #endif
 
     if (ipopt > 0)
@@ -666,7 +666,7 @@ static void optimisePurityBins(Settings *s, SurvTable *st, CalTable *ct)
                 ipbin = ip;
                 purity_bins[npurity_bins++] = st->purity[ipbin];
 #if 0
-                fprintf(stderr,"2: npurity_bins=%d ipbin=%d purity=%f\n", npurity_bins, ipbin, st->purity[ipbin]);
+                display("2: npurity_bins=%d ipbin=%d purity=%f\n", npurity_bins, ipbin, st->purity[ipbin]);
 #endif
             }
         }
@@ -675,7 +675,7 @@ static void optimisePurityBins(Settings *s, SurvTable *st, CalTable *ct)
         ipbin = ipopt;
         purity_bins[npurity_bins++] = st->purity[ipbin];
 #if 0
-        fprintf(stderr,"3: npurity_bins=%d ipbin=%d purity=%f\n", npurity_bins, ipbin, st->purity[ipbin]);
+        display("3: npurity_bins=%d ipbin=%d purity=%f\n", npurity_bins, ipbin, st->purity[ipbin]);
 #endif
     }
 
@@ -693,7 +693,7 @@ static void optimisePurityBins(Settings *s, SurvTable *st, CalTable *ct)
                 ipbin = ip;
                 purity_bins[npurity_bins++] = st->purity[ipbin];
 #if 0
-                fprintf(stderr,"4: npurity_bins=%d ipbin=%d purity=%f\n", npurity_bins, ipbin, st->purity[ipbin]);
+                display("4: npurity_bins=%d ipbin=%d purity=%f\n", npurity_bins, ipbin, st->purity[ipbin]);
 #endif
             }
         }
@@ -702,7 +702,7 @@ static void optimisePurityBins(Settings *s, SurvTable *st, CalTable *ct)
         ipbin = ipmax;
         purity_bins[npurity_bins++] = st->purity[ipbin];
 #if 0
-        fprintf(stderr,"5: npurity_bins=%d ipbin=%d purity=%f\n", npurity_bins, ipbin, st->purity[ipbin]);
+        display("5: npurity_bins=%d ipbin=%d purity=%f\n", npurity_bins, ipbin, st->purity[ipbin]);
 #endif
     }
 
@@ -711,7 +711,7 @@ static void optimisePurityBins(Settings *s, SurvTable *st, CalTable *ct)
         purity_bins[npurity_bins++] = st->purity[75];
 #if 0
     if (ipmax < 75)
-        fprintf(stderr,"6: npurity_bins=%d ipbin=%d purity=%f\n", npurity_bins, 75, st->purity[75]);
+        display("6: npurity_bins=%d ipbin=%d purity=%f\n", npurity_bins, 75, st->purity[75]);
 #endif
 
     /* move data into the new set of bins */
