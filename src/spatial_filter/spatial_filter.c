@@ -1423,7 +1423,7 @@ static void usage(int code)
 	fprintf(usagefp, "      -height height\n");
 	fprintf(usagefp, "                 Tile height\n");
         fprintf(usagefp, "      -i --intensity-dir dir\n");
-        fprintf(usagefp, "                 Intensity directory\n");
+        fprintf(usagefp, "                 (Raw) Intensity directory (to find ../ImageSize.dat)\n");
         fprintf(usagefp, "                 required unless tile width and height are supplied\n");
 	fprintf(usagefp, "      -s --snp_file file\n");
 	fprintf(usagefp, "                 set of snps to be removed\n");
