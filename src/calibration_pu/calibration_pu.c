@@ -79,6 +79,9 @@
 #include "pb_config.h"
 #endif
 
+#ifdef HAVE_PREAD
+# define _XOPEN_SOURCE 500 // for pread
+#endif
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
@@ -110,6 +113,9 @@
 #include <aprintf.h>
 #include <die.h>
 #include <rts.h>
+#include <shared.h>
+#include <snp.h>
+#include <parse_bam.h>
 
 #include <version.h>
 
@@ -213,78 +219,6 @@ typedef struct {
     size_t        num_spots;
 } CifData;
 
-
-static
-void
-checked_chdir(const char* dir){
-    if(chdir(dir)){
-        fprintf(stderr,"ERROR: failed to change directory to: %s\n",dir);
-        exit(EXIT_FAILURE);
-    }
-}
-
-static char *complement_table = NULL;
-
-static void readSnpFile(Settings *s)
-{
-    FILE *fp;
-    HashTable *snp_hash;
-    static const int line_size = 8192;
-    char line[line_size];
-    size_t count = 0;
-    char last_chrom[100] = "";
-    
-    fprintf(stderr, "reading snp file %s\n", s->snp_file);
-
-    fp = fopen(s->snp_file, "rb");
-    if (NULL == fp) {
-        fprintf(stderr, "ERROR: can't open known snp file %s: %s\n",
-                s->snp_file, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-
-    if (NULL == (snp_hash = HashTableCreate(0, HASH_DYNAMIC_SIZE|HASH_FUNC_JENKINS3))) {
-        fprintf(stderr, "ERROR: creating snp hash table\n");
-        exit(EXIT_FAILURE);
-    }
-
-    while( fgets(line, line_size, fp) )
-    {
-        char key[100];
-        HashData hd;
-        int bin, start, end;
-        char chrom[100];
-            
-        if( 4 != sscanf(line, "%d\t%s\t%d\t%d", &bin, chrom, &start, &end) )
-        {
-            fprintf(stderr, "ERROR: reading snp file\n%s\n", line);
-            exit(EXIT_FAILURE);
-        }
-        
-        /* N.B rod start is 0 based */
-        snprintf(key, sizeof(key), "%s:%d", chrom, start);
-        hd.i = 0;
-	if( NULL == HashTableAdd(snp_hash, key, strlen(key), hd, NULL) )
-        {
-            fprintf(stderr, "ERROR: building snp hash table\n");
-            exit(EXIT_FAILURE);
-	}
-
-        if( strcmp(chrom, last_chrom) ){
-            /*if( count ) fprintf(stderr, "read %lu snps on chrom %s\n", count, last_chrom);*/
-            strcpy(last_chrom, chrom);
-            count = 0;
-        }
-
-        count++;
-    }
-
-    /*if( count ) fprintf(stderr, "read %lu snps on chrom %s\n", count, last_chrom);*/
-
-    fclose(fp);
-
-    s->snp_hash = snp_hash;
-}
 
 static void initialiseSurvTable(Settings *s, SurvTable *st, int tile, int read, int cycle)
 {
@@ -859,506 +793,6 @@ float GetPu (int n, int data[])
     return (float)Imax/(float)Isum;
 }
 
-/**
- * Reverses the direction of the array of ints
- *
- * @param int is the input array. <b>NB.</b> this is destructively modified.
- *
- * @returns a pointer to the original storage but with the contents
- * modified
- */
-int *
-reverse_int(int *num, int n)
-{
-    int *t = num, *s = num + n - 1;
-    int c;
-
-    while (t < s) {
-        c = *s;
-        *s = *t;
-        *t = c;
-        t++;
-        s--;
-    }
-
-    return num;
-}
-
-
-// lifted from /nfs/users/nfs_j/jkb/work/tracetools/sequtil/seq_ops.c
-
-/**
- * Reverses the direction of the string.
- *
- * @param seq is the input sequence. <b>NB.</b> this is destructively modified.
- *
- * @returns a pointer to the original string storage but with the contents
- * modified
- */
-char *
-reverse_seq(char *seq)
-{
-    char *t = seq, *s = seq + strlen(seq) - 1;
-    char c;
-
-    while (t < s) {
-        c = *s;
-        *s = *t;
-        *t = c;
-        t++;
-        s--;
-    }
-
-    return seq;
-}
-
-/**
- * Return a character representing the complement-base of the supplied
- * parameter.  The mapping is as follows: a->t, c->g, g->c, t|u->a, [->],
- * ]->[, -->-, all others->n. There is a single shot initalisation
- * of a static lookup table to represent this mapping. In addition the
- * case of the supplied parameter is preserved, Uppercase->Uppercase and
- * vice-versa.
- *
- * @param c is the character representing a base. Mapped values include:
- * {a,c,g,t,u,[,],-} all other inputs get a default mapping of 'n'.
- *
- * @returns the character representation of the bilogical compliment of the
- * supplied base. 
- */
-char
-complement_base(char c)
-{
-
-    if (!complement_table) {
-	int x;
-	complement_table = (char *) calloc(256, sizeof(char)) + 127;
-
-	for (x = -127; x < 128; x++) {
-	    if (x == 'a')
-		complement_table[x] = 't';
-	    else if (x == 'c')
-		complement_table[x] = 'g';
-	    else if (x == 'g')
-		complement_table[x] = 'c';
-	    else if (x == 't' || x == 'u')
-		complement_table[x] = 'a';
-	    else if (x == 'n')
-		complement_table[x] = 'n';
-	    else if (x == 'A')
-		complement_table[x] = 'T';
-	    else if (x == 'C')
-		complement_table[x] = 'G';
-	    else if (x == 'G')
-		complement_table[x] = 'C';
-	    else if (x == 'T' || x == 'U')
-		complement_table[x] = 'A';
-	    else if (x == 'N')
-		complement_table[x] = 'N';
-	    else
-		complement_table[x] = x;
-	}
-    }
-
-    return complement_table[(int) c];
-}
-
-/**
- * Convert a string containing a string representation of a base sequence
- * into its biological complement. See complement_base for the mapping. This
- * does not reverses the direction of the string.
- *
- * @see complement_base
- *
- * @param seq is the input sequence. <b>NB.</b> this is destructively modified.
- *
- * @returns a pointer to the original string storage but with the contents
- * modified to have complement characters.
- */
-char *
-complement_seq(char *seq)
-{
-    char *s = seq;
-
-    while (*s) {
-        *s = complement_base(*s);
-
-        s++;
-    }
-
-    return seq;
-}
-
-/* cts -simplification of parse_4_int code for single int parse
- */
-inline static
-const char *
-parse_next_int(const char *str, int *val, const char *sep) {
-    const static char spaces[256] = {
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-    };
-
-    const char* const start = str;
-    int minus = 0;
-    int ival = 0;
-    char c;
-
-    if (NULL == sep) {
-        while (*str && spaces[(unsigned) *str]) ++str;
-    } else {
-        while (*str && NULL != strchr(sep, *str)) ++str;
-    }
-
-    c = *str;
-
-    if (!c) {
-      /*
-        fprintf(stderr, "Error: expected to parse int from string \"%s\"\n", start);
-        exit(EXIT_FAILURE);
-	*/
-      return NULL;
-    }
-
-    if (c == '-' || c == '+') {
-        minus = (c == '-');
-        c = *++str;
-    }
-    
-    while (c >= '0' && c <= '9') {
-        ival = ival * 10 + (c-'0');
-        c = *++str;
-    }
-
-    if (NULL == sep) {
-        switch(c) {
-        case '\n': case '\r': case '\t': case ' ': case '\0':
-            if (minus) ival = -ival;
-            *val = ival;
-            return str;
-        }
-    } else {
-        if (NULL != strchr(sep, *str)) {
-            if (minus) ival = -ival;
-            *val = ival;
-            return str;
-        }
-    }
-    fprintf(stderr, "Error: expected to parse int from string \"%s\"\n", start);
-    exit(EXIT_FAILURE);
-}
-/*
- * cts - parse bam file line
- *
- * returns 0 on success, 1 on expected failure.
- */
-static
-int
-parse_bam_file_line(Settings *s,
-                    samfile_t *fp,
-                    bam1_t *bam,
-                    int *bam_lane,
-                    int *bam_tile,
-                    int *bam_x,
-                    int *bam_y,
-                    size_t *bam_offset,
-                    int *bam_read,
-                    char* read_seq,
-                    int* read_qual,
-                    char* read_ref,
-                    int* read_mismatch,
-                    const int read_buff_size) {
-
-    char *name;
-    int32_t pos;
-    uint32_t *cigar;
-    uint8_t *seq, *qual, *m_ptr, *ci_ptr;
-    char *mismatch;
-    const char *sep = ":#/", *sep2 = "ACGTN^" ;
-    const char *cp, *cp2;
-    int lane, tile, x, y, offset, read, i, j;
-    int skip = 0, clip, insert, delete;
-    HashItem *hi;
-
-    if(0 == read_buff_size) return 1;
-
-    read_seq[0] = 0;
-
-    if( 0 > samread(fp, bam)) return 1;
-    
-    if (BAM_FUNMAP & bam->core.flag)
-        return 0;
-
-    lane = -1;
-    tile = -1;
-    x = -1;
-    y = -1;
-    offset = -1;
-
-    name = bam1_qname(bam);
-    cp = strchr(name,':');
-    if(NULL == cp){
-        fprintf(stderr,"ERROR: Invalid run in name: \"%s\"\n",name);
-        exit(EXIT_FAILURE);
-    }
-    cp++;
-    cp = parse_next_int(cp,&lane,sep);
-    cp = parse_next_int(cp,&tile,sep);
-    cp = parse_next_int(cp,&x,sep);
-    cp = parse_next_int(cp,&y,sep);
-
-    /* look for ci tag */
-    ci_ptr = bam_aux_get(bam, "ci");
-    if (NULL == ci_ptr){
-        /* no ci tag get offset from name */
-        cp = parse_next_int(cp,&offset,sep);
-        if(NULL == cp){
-            fprintf(stderr,"ERROR: No ci tag and no offset in name: \"%s\"\n",name);
-            exit(EXIT_FAILURE);
-        }
-    }else{
-        offset = bam_aux2i(ci_ptr);
-        /* name offset is 0 based but ci is 1 based */
-        offset--;
-    }
-       
-    if(lane > N_LANES+1 || lane < 1){
-        fprintf(stderr,"ERROR: Invalid lane value in name: \"%s\"\n",name);
-        exit(EXIT_FAILURE);
-    }
-
-    if(tile <= 0){
-        fprintf(stderr,"ERROR: Invalid tile value in name: \"%s\"\n",name);
-        exit(EXIT_FAILURE);
-    }
-
-    if(offset < 0){
-        fprintf(stderr,"ERROR: Invalid offset value in name: \"%s\"\n",name);
-        exit(EXIT_FAILURE);
-    }
-
-    read = 0;
-    if(BAM_FPAIRED & bam->core.flag){
-        if(BAM_FREAD1 & bam->core.flag)
-            read = 1;
-        if(BAM_FREAD2 & bam->core.flag)
-            read = 2;
-        if(read == 0){
-            fprintf(stderr,"ERROR: Unable to determine read from flag %d for read: \"%s\"\n",bam->core.flag,name);
-            exit(EXIT_FAILURE);
-        }
-    }
-
-#ifdef QC_FAIL
-    if(BAM_FQCFAIL & bam->core.flag)
-        return 0;
-#endif
-    
-#ifdef PROPERLY_PAIRED
-    if(BAM_FPAIRED & bam->core.flag)
-        if(0 == (BAM_FPROPER_PAIR & bam->core.flag))
-            return 0;
-#endif
-    
-    pos   = bam->core.pos;
-    cigar = bam1_cigar(bam);
-    seq   = bam1_seq(bam);
-    qual  = bam1_qual(bam);
-    m_ptr = bam_aux_get(bam, "MD");
-
-    if(NULL == m_ptr){
-        fprintf(stderr,"ERROR: No mismatch for read: \"%s\"\n",name);
-        exit(EXIT_FAILURE);
-    }else{
-        mismatch = bam_aux2Z(m_ptr);
-        if(NULL == mismatch){
-            fprintf(stderr,"ERROR: Invalid mismatch %s for read: \"%s\"\n",mismatch,name);
-            exit(EXIT_FAILURE);
-        }
-    }
-
-    memset(read_mismatch, 0, bam->core.l_qseq * sizeof(int));
-
-    for (i = 0; i < bam->core.l_qseq; i++) {
-        read_seq[i] =  bam_nt16_rev_table[bam1_seqi(seq, i)];
-        read_qual[i] = qual[i];
-    }
-    read_seq[i] = 0;
-    read_ref[i] = 0;
-    
-    j = 0;
-    for (i=0; i<bam->core.n_cigar; i++) {
-        int l = cigar[i] >> 4, op = cigar[i] & 0xf, k;
-        switch(op) {
-        case BAM_CMATCH:
-            // CIGAR: alignment match;
-            for(k=0; k<l; j++, k++)
-            {
-                read_mismatch[j] |= BASE_ALIGN;
-                read_ref[j] = read_seq[j];
-            }
-            break;
-        case BAM_CDEL:
-            // CIGAR: deletion from the reference
-            if(j == bam->core.l_qseq){
-                fprintf(stderr,"ERROR: Trailing deletion for read: %s\n", name);
-                exit(EXIT_FAILURE);
-            }
-            read_mismatch[j] |= BASE_DELETION;
-            break;
-        case BAM_CINS:
-            // CIGAR: insertion to the reference 
-            for(k=0; k<l; j++, k++)
-            {
-                read_mismatch[j] |= BASE_INSERTION;
-                read_ref[j] = 'I';
-            }
-            break;
-        case BAM_CSOFT_CLIP:
-            // CIGAR: clip on the read with clipped sequence present in qseq
-            for(k=0; k<l; j++, k++)
-            {
-                read_mismatch[j] |= BASE_SOFT_CLIP;
-                read_ref[j] = 'S';
-            }
-            break;
-        default:
-            fprintf(stderr,"ERROR: Unexpected CIGAR operation: %c\n", op);
-            exit(EXIT_FAILURE);
-        }
-    }
-    if(j != bam->core.l_qseq){
-        fprintf(stderr,"ERROR: Inconsistent cigar string %d > %d for read: \"%s\"\n", j, bam->core.l_qseq, name);
-        exit(EXIT_FAILURE);
-    }
-
-    /* clipped sequence is missing from MD */
-    for(i=0,clip=0;i<bam->core.l_qseq;i++,clip++)
-        if( 0 == (read_mismatch[i] & BASE_SOFT_CLIP))
-            break;
-    if(0 == (read_mismatch[i] & BASE_ALIGN)){
-        fprintf(stderr,"ERROR: Inconsistent cigar string expect alignment after soft clip for read: \"%s\"\n", name);
-        exit(EXIT_FAILURE);
-    }
-    if(clip )
-        skip += clip;
-
-    cp2 = mismatch;
-    while( NULL != (cp2 = parse_next_int(cp2,&j,sep2)) ){
-        /* skip matching bases, exclude insertions which are missing from MD */
-        for(insert=0;j>0;i++)
-            if(read_mismatch[i] & BASE_INSERTION)
-                insert++;
-            else
-                j--;
-        if(insert)
-            skip += insert;
-
-        if(0 == strlen(cp2))
-            /* reached end of MD string */
-            break;
-
-        /* skip insertions which are missing from MD */
-        for(insert=0;i<bam->core.l_qseq;i++,insert++)
-            if(0 == (read_mismatch[i] & BASE_INSERTION))
-                break;
-        if (i == bam->core.l_qseq)
-        {
-            fprintf(stderr,"ERROR: Invalid MD string %s for read: \"%s\"\n", mismatch, name);
-            exit(EXIT_FAILURE);
-        }
-        if(insert)
-            skip += insert;
-
-        switch(*cp2) {
-        case '^':
-            /* deletions missing from read_seq */
-            delete = 0;
-            while( NULL != strchr("ACGTN", *(++cp2)) )
-                delete++;
-            if(delete)
-                skip -= delete;
-            break;
-        case 'A':
-        case 'C':
-        case 'G':
-        case 'T':
-        case 'N':
-            /* mismatch */
-            if(0 == (read_mismatch[i] & BASE_ALIGN)){
-                fprintf(stderr,"ERROR: Inconsistent cigar string expect alignment at mismatch for read: \"%s\"\n", name);
-                exit(EXIT_FAILURE);
-            }
-            read_ref[i] = *cp2;
-            read_mismatch[i] |= BASE_MISMATCH;
-            
-            pos = bam->core.pos + (i-skip);
-
-            if( NULL != s->snp_hash ){
-                char *chrom = fp->header->target_name[bam->core.tid];
-                char key[100];
-                /* N.B bam->core.pos is 0 based */
-                snprintf(key, sizeof(key), "%s:%d", chrom, pos);
-                if (NULL != (hi = HashTableSearch(s->snp_hash, key, strlen(key))))
-                {
-                    hi->data.i++;
-                    read_mismatch[i] |= BASE_KNOWN_SNP;
-                }
-            }
-            i++;
-            break;
-        default:
-            fprintf(stderr,"ERROR: Invalid mismatch %s(%c)\n", mismatch, *cp2);
-            exit(EXIT_FAILURE);
-        }
-    }
-
-    /* clipped sequence is missing from MD */
-    for(clip=0;i<bam->core.l_qseq;i++,clip++)
-        if(0 == (read_mismatch[i] & BASE_SOFT_CLIP))
-            break;
-    if(clip )
-        skip += clip;
-    if (i != bam->core.l_qseq)
-    {
-        fprintf(stderr,"ERROR: Inconsistent MD string %d != %d for read: \"%s\"\n", i, bam->core.l_qseq, name);
-        exit(EXIT_FAILURE);
-    }
-
-    if (BAM_FREVERSE & bam->core.flag) {
-        read_seq = reverse_seq(read_seq);
-        read_seq = complement_seq(read_seq);
-        read_qual = reverse_int(read_qual, bam->core.l_qseq);
-        read_ref = reverse_seq(read_ref);
-        read_ref = complement_seq(read_ref);
-        read_mismatch = reverse_int(read_mismatch, bam->core.l_qseq);
-    }
-    
-    *bam_lane = lane;
-    *bam_tile = tile;
-    *bam_x = x;
-    *bam_y = y;
-    *bam_offset = offset;
-    *bam_read = read;
-
-    return 0;
-}
-
-
 int cif_dir_compare(const void *va, const void *vb) {
     const CifDir *a = (const CifDir *) va;
     const CifDir *b = (const CifDir *) vb;
@@ -1472,6 +906,13 @@ static int get_cif_dirs(Settings *s) {
     }
 }
 
+#ifdef HAVE_PREAD
+
+# warning "trying to use system pread"
+# define pread_bytes pread
+
+#else
+# warning "using Rob's(?) pread"
 /* Read count bytes at position offset in file fd.  It actually emulates
    pread(2) as the real thing doesn't seem to be any faster, and it
    may not be present. */
@@ -1490,6 +931,7 @@ static ssize_t pread_bytes(int fd, void *buf, size_t count, off_t offset) {
     } while (res > 0 && total < count);
     return res < 0 ? res : total;
 }
+#endif
 
 static void read_cif_chunk(Settings *s, CifCycleData *cycle, size_t spot_num) {
     size_t num_entries;
@@ -1898,10 +1340,13 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
         size_t bam_offset = 0;
         int cycle;
 
-        if (0 != parse_bam_file_line(s, fp_bam, bam,
-                                     &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_offset, &bam_read,
+        if (0 != parse_bam_file_line(fp_bam, bam,
+                                     &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, &bam_offset))
+            break;
+
+        if (0 != parse_bam_file_line_full(fp_bam, bam,
                                      bam_read_seq, bam_read_qual, bam_read_ref,
-                                     bam_read_mismatch, bam_read_buff_size)) {
+                                     bam_read_mismatch, bam_read_buff_size,s->snp_hash)) {
             break;
         }
 
@@ -2330,7 +1775,7 @@ int main(int argc, char **argv) {
 
     /* read the snp_file */
     if (NULL != settings.snp_file) {
-        readSnpFile(&settings);
+        settings.snp_hash = readSnpFile(settings.snp_file);
         if (NULL == settings.snp_hash) {
             fprintf(stderr, "ERROR: reading snp file %s\n", settings.snp_file);
             exit(EXIT_FAILURE);
