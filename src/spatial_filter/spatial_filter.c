@@ -97,15 +97,11 @@
 #include <aprintf.h>
 #include <die.h>
 #include <rts.h>
+#include <shared.h>
+#include <snp.h>
+#include <parse_bam.h>
 
 #include <version.h>
-
-#define BASE_ALIGN      (1<<0)
-#define BASE_MISMATCH   (1<<1)
-#define BASE_INSERTION  (1<<2)
-#define BASE_DELETION   (1<<3)
-#define BASE_SOFT_CLIP  (1<<4)
-#define BASE_KNOWN_SNP  (1<<5)
 
 #define PHRED_QUAL_OFFSET  33  // phred quality values offset
 
@@ -151,14 +147,6 @@ typedef struct {
 	float region_deletion_threshold;
 } Settings;
 
-static char *complement_table = NULL;
-
-static void checked_chdir(const char *dir)
-{
-	if (chdir(dir)) die("ERROR: failed to change directory to: %s\n", dir);
-
-}
-
 static void setRegions(Settings * s)
 {
 	// if an intensity directory is given read the ImageSize.dat file to get the tile size
@@ -191,56 +179,6 @@ static void setRegions(Settings * s)
 	if (!s->quiet) display("nregions_x=%d nregions_y=%d nregions=%d\n", s->nregions_x, s->nregions_y, s->nregions);
 
 	return;
-}
-
-static void readSnpFile(Settings * s)
-{
-	FILE *fp;
-	HashTable *snp_hash;
-	static const int line_size = 8192;
-	char line[line_size];
-	size_t count = 0;
-	char last_chrom[100] = "";
-
-	display("reading snp file %s\n", s->snp_file);
-
-	fp = fopen(s->snp_file, "rb");
-	if (NULL == fp) {
-		die("ERROR: can't open known snp file %s: %s\n", s->snp_file, strerror(errno));
-	}
-
-	if (NULL == (snp_hash = HashTableCreate(0, HASH_DYNAMIC_SIZE | HASH_FUNC_JENKINS3))) {
-		die("ERROR: creating snp hash table\n");
-	}
-
-	while (fgets(line, line_size, fp)) {
-		char key[100];
-		HashData hd;
-		int bin, start, end;
-		char chrom[100];
-
-		if (4 != sscanf(line, "%d\t%s\t%d\t%d", &bin, chrom, &start, &end)) {
-			die("ERROR: reading snp file\n%s\n", line);
-		}
-
-		/* N.B rod start is 0 based */
-		snprintf(key, sizeof(key), "%s:%d", chrom, start);
-		hd.i = 0;
-		if (NULL == HashTableAdd(snp_hash, key, strlen(key), hd, NULL)) {
-			die("ERROR: building snp hash table\n");
-		}
-
-		if (strcmp(chrom, last_chrom)) {
-			strcpy(last_chrom, chrom);
-			count = 0;
-		}
-
-		count++;
-	}
-
-	fclose(fp);
-
-	s->snp_hash = snp_hash;
 }
 
 //
@@ -463,540 +401,6 @@ void printFilter(Settings *s, int ntiles, FILE *fp)
 	}
 }
 
-
-/**
- * Reverses the direction of the array of ints
- *
- * @param int is the input array. <b>NB.</b> this is destructively modified.
- *
- * @returns a pointer to the original storage but with the contents
- * modified
- */
-int *reverse_int(int *num, int n)
-{
-	int *t = num, *s = num + n - 1;
-	int c;
-
-	while (t < s) {
-		c = *s;
-		*s = *t;
-		*t = c;
-		t++;
-		s--;
-	}
-
-	return num;
-}
-
-// lifted from /nfs/users/nfs_j/jkb/work/tracetools/sequtil/seq_ops.c
-
-/**
- * Reverses the direction of the string.
- *
- * @param seq is the input sequence. <b>NB.</b> this is destructively modified.
- *
- * @returns a pointer to the original string storage but with the contents
- * modified
- */
-char *reverse_seq(char *seq)
-{
-	char *t = seq, *s = seq + strlen(seq) - 1;
-	char c;
-
-	while (t < s) {
-		c = *s;
-		*s = *t;
-		*t = c;
-		t++;
-		s--;
-	}
-
-	return seq;
-}
-
-/**
- * Return a character representing the complement-base of the supplied
- * parameter.  The mapping is as follows: a->t, c->g, g->c, t|u->a, [->],
- * ]->[, -->-, all others->n. There is a single shot initalisation
- * of a static lookup table to represent this mapping. In addition the
- * case of the supplied parameter is preserved, Uppercase->Uppercase and
- * vice-versa.
- *
- * @param c is the character representing a base. Mapped values include:
- * {a,c,g,t,u,[,],-} all other inputs get a default mapping of 'n'.
- *
- * @returns the character representation of the bilogical compliment of the
- * supplied base. 
- */
-char complement_base(char c)
-{
-
-	if (!complement_table) {
-		int x;
-		complement_table = (char *)calloc(256, sizeof(char)) + 127;
-
-		for (x = -127; x < 128; x++) {
-			if (x == 'a')
-				complement_table[x] = 't';
-			else if (x == 'c')
-				complement_table[x] = 'g';
-			else if (x == 'g')
-				complement_table[x] = 'c';
-			else if (x == 't' || x == 'u')
-				complement_table[x] = 'a';
-			else if (x == 'n')
-				complement_table[x] = 'n';
-			else if (x == 'A')
-				complement_table[x] = 'T';
-			else if (x == 'C')
-				complement_table[x] = 'G';
-			else if (x == 'G')
-				complement_table[x] = 'C';
-			else if (x == 'T' || x == 'U')
-				complement_table[x] = 'A';
-			else if (x == 'N')
-				complement_table[x] = 'N';
-			else
-				complement_table[x] = x;
-		}
-	}
-
-	return complement_table[(int)c];
-}
-
-/**
- * Convert a string containing a string representation of a base sequence
- * into its biological complement. See complement_base for the mapping. This
- * does not reverses the direction of the string.
- *
- * @see complement_base
- *
- * @param seq is the input sequence. <b>NB.</b> this is destructively modified.
- *
- * @returns a pointer to the original string storage but with the contents
- * modified to have complement characters.
- */
-char *complement_seq(char *seq)
-{
-	char *s = seq;
-
-	while (*s) {
-		*s = complement_base(*s);
-		s++;
-	}
-
-	return seq;
-}
-
-/* cts -simplification of parse_4_int code for single int parse
- */
-inline static
-const char *parse_next_int(const char *str, int *val, const char *sep)
-{
-	const static char spaces[256] = {
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-	};
-
-	const char *const start = str;
-	int minus = 0;
-	int ival = 0;
-	char c;
-
-	if (NULL == sep) {
-		while (*str && spaces[(unsigned)*str])
-			++str;
-	} else {
-		while (*str && NULL != strchr(sep, *str))
-			++str;
-	}
-
-	c = *str;
-
-	if (!c) {
-		/*
-		   die( "Error: expected to parse int from string \"%s\"\n", start);
-		 */
-		return NULL;
-	}
-
-	if (c == '-' || c == '+') {
-		minus = (c == '-');
-		c = *++str;
-	}
-
-	while (c >= '0' && c <= '9') {
-		ival = ival * 10 + (c - '0');
-		c = *++str;
-	}
-
-	if (NULL == sep) {
-		switch (c) {
-		case '\n':
-		case '\r':
-		case '\t':
-		case ' ':
-		case '\0':
-			if (minus)
-				ival = -ival;
-			*val = ival;
-			return str;
-		}
-	} else {
-		if (NULL != strchr(sep, *str)) {
-			if (minus)
-				ival = -ival;
-			*val = ival;
-			return str;
-		}
-	}
-	die("Error: expected to parse int from string \"%s\"\n", start);
-	return NULL;
-}
-
-/*
- * cts - parse bam file line
- *
- * returns 0 on success, 1 on expected failure, 2 to ignore this entry.
- */
-static
-int
-parse_bam_file_line_full(Settings *s,
-			 samfile_t *fp,
-			 bam1_t *bam,
-			 int *bam_lane,
-			 int *bam_tile,
-			 int *bam_x,
-			 int *bam_y,
-			 int *bam_read,
-			 char *read_seq,
-			 int *read_qual,
-			 int *read_mismatch, const int read_buff_size)
-{
-
-	char *name;
-	int32_t pos;
-	uint32_t *cigar;
-	uint8_t *seq, *qual, *m_ptr;
-	char *mismatch = NULL;
-	const char *sep = ":#/", *sep2 = "ACGTN^";
-	const char *cp, *cp2;
-	int lane, tile, x, y, read, i, j;
-	int skip = 0, clip, insert, delete;
-	HashItem *hi;
-
-	if (0 == read_buff_size)
-		return 1;
-
-	read_seq[0] = 0;
-
-	if (0 > samread(fp, bam))
-		return 1;
-
-	if (BAM_FUNMAP & bam->core.flag) {
-		return 0;
-	}
-
-	lane = -1;
-	tile = -1;
-	x = -1;
-	y = -1;
-
-	name = bam1_qname(bam);
-	cp = strchr(name, ':');
-	if (NULL == cp) {
-		die("ERROR: Invalid run in name: \"%s\"\n", name);
-	}
-	cp++;
-	cp = parse_next_int(cp, &lane, sep);
-	cp = parse_next_int(cp, &tile, sep);
-	cp = parse_next_int(cp, &x, sep);
-	cp = parse_next_int(cp, &y, sep);
-
-	if (lane > N_LANES + 1 || lane < 1) {
-		die("ERROR: Invalid lane value in name: \"%s\"\n", name);
-	}
-
-	if (tile <= 0) {
-		die("ERROR: Invalid tile value in name: \"%s\"\n", name);
-	}
-
-	read = 0;
-	if (BAM_FPAIRED & bam->core.flag) {
-		if (BAM_FREAD1 & bam->core.flag)
-			read = 1;
-		if (BAM_FREAD2 & bam->core.flag)
-			read = 2;
-		if (read == 0) {
-			die("ERROR: Unable to determine read from flag %d for read: \"%s\"\n", bam->core.flag, name);
-		}
-	}
-
-#ifdef QC_FAIL
-	if (BAM_FQCFAIL & bam->core.flag) {
-		return 0;
-}
-#endif
-
-#ifdef PROPERLY_PAIRED
-	if (BAM_FPAIRED & bam->core.flag) {
-		if (0 == (BAM_FPROPER_PAIR & bam->core.flag)) {
-			return 0;
-	}
-}
-#endif
-
-	pos = bam->core.pos;
-	cigar = bam1_cigar(bam);
-	seq = bam1_seq(bam);
-	qual = bam1_qual(bam);
-	m_ptr = bam_aux_get(bam, "MD");
-
-	if (NULL == m_ptr) {
-		die("ERROR: No mismatch for read: \"%s\"\n", name);
-	} else {
-		mismatch = bam_aux2Z(m_ptr);
-		if (NULL == mismatch) {
-			die("ERROR: Invalid mismatch %s for read: \"%s\"\n",
-			    mismatch, name);
-		}
-	}
-
-	memset(read_mismatch, 0, bam->core.l_qseq * sizeof(int));
-
-	for (i = 0; i < bam->core.l_qseq; i++) {
-		read_seq[i] = bam_nt16_rev_table[bam1_seqi(seq, i)];
-		read_qual[i] = qual[i];
-	}
-	read_seq[i] = 0;
-
-	j = 0;
-	for (i = 0; i < bam->core.n_cigar; i++) {
-		int l = cigar[i] >> 4, op = cigar[i] & 0xf, k;
-		switch (op) {
-		case BAM_CMATCH:
-			// CIGAR: alignment match;
-			for (k = 0; k < l; j++, k++)
-				read_mismatch[j] |= BASE_ALIGN;
-			break;
-		case BAM_CDEL:
-			// CIGAR: deletion from the reference
-			if (j == bam->core.l_qseq) {
-				die("ERROR: Trailing deletion for read: %s\n",
-				    name);
-			}
-			read_mismatch[j] |= BASE_DELETION;
-			break;
-		case BAM_CINS:
-			// CIGAR: insertion to the reference 
-			for (k = 0; k < l; j++, k++)
-				read_mismatch[j] |= BASE_INSERTION;
-			break;
-		case BAM_CSOFT_CLIP:
-			// CIGAR: clip on the read with clipped sequence present in qseq
-			for (k = 0; k < l; j++, k++)
-				read_mismatch[j] |= BASE_SOFT_CLIP;
-			break;
-		default:
-			die("ERROR: Unexpected CIGAR operation: %c\n", op);
-		}
-	}
-	if (j != bam->core.l_qseq) {
-		die("ERROR: Inconsistent cigar string %d > %d for read: \"%s\"\n", j, bam->core.l_qseq, name);
-	}
-
-	/* clipped sequence is missing from MD */
-	for (i = 0, clip = 0; i < bam->core.l_qseq; i++, clip++)
-		if (0 == (read_mismatch[i] & BASE_SOFT_CLIP))
-			break;
-	if (0 == (read_mismatch[i] & BASE_ALIGN)) {
-		die("ERROR: Inconsistent cigar string expect alignment after soft clip for read: \"%s\"\n", name);
-	}
-	if (clip)
-		skip += clip;
-
-	cp2 = mismatch;
-	while (NULL != (cp2 = parse_next_int(cp2, &j, sep2))) {
-		/* skip matching bases, exclude insertions which are missing from MD */
-		for (insert = 0; j > 0; i++)
-			if (read_mismatch[i] & BASE_INSERTION)
-				insert++;
-			else
-				j--;
-		if (insert)
-			skip += insert;
-
-		if (0 == strlen(cp2))
-			/* reached end of MD string */
-			break;
-
-		/* skip insertions which are missing from MD */
-		for (insert = 0; i < bam->core.l_qseq; i++, insert++)
-			if (0 == (read_mismatch[i] & BASE_INSERTION))
-				break;
-		if (i == bam->core.l_qseq) {
-			die("ERROR: Invalid MD string %s for read: \"%s\"\n",
-			    mismatch, name);
-		}
-		if (insert)
-			skip += insert;
-
-		switch (*cp2) {
-		case '^':
-			/* deletions missing from read_seq */
-			delete = 0;
-			while (NULL != strchr("ACGTN", *(++cp2)))
-				delete++;
-			if (delete)
-				skip -= delete;
-			break;
-		case 'A':
-		case 'C':
-		case 'G':
-		case 'T':
-		case 'N':
-			/* mismatch */
-			if (0 == (read_mismatch[i] & BASE_ALIGN)) {
-				die("ERROR: Inconsistent cigar string expect alignment at mismatch for read: \"%s\"\n", name);
-			}
-			read_mismatch[i] |= BASE_MISMATCH;
-
-			pos = bam->core.pos + (i - skip);
-
-			if (NULL != s->snp_hash) {
-				char *chrom =
-				    fp->header->target_name[bam->core.tid];
-				char key[100];
-				/* N.B bam->core.pos is 0 based */
-				snprintf(key, sizeof(key), "%s:%d", chrom, pos);
-				if (NULL !=
-				    (hi =
-				     HashTableSearch(s->snp_hash, key,
-						     strlen(key)))) {
-					hi->data.i++;
-					read_mismatch[i] |= BASE_KNOWN_SNP;
-				}
-			}
-			i++;
-			break;
-		default:
-			die("ERROR: Invalid mismatch %s(%c)\n", mismatch, *cp2);
-		}
-	}
-
-	/* clipped sequence is missing from MD */
-	for (clip = 0; i < bam->core.l_qseq; i++, clip++)
-		if (0 == (read_mismatch[i] & BASE_SOFT_CLIP))
-			break;
-	if (clip)
-		skip += clip;
-	if (i != bam->core.l_qseq) {
-		die("ERROR: Inconsistent MD string %d != %d for read: \"%s\"\n",
-		    i, bam->core.l_qseq, name);
-	}
-
-	if (BAM_FREVERSE & bam->core.flag) {
-		read_seq = reverse_seq(read_seq);
-		read_seq = complement_seq(read_seq);
-		read_qual = reverse_int(read_qual, bam->core.l_qseq);
-		read_mismatch = reverse_int(read_mismatch, bam->core.l_qseq);
-	}
-
-	*bam_lane = lane;
-	*bam_tile = tile;
-	*bam_x = x;
-	*bam_y = y;
-	*bam_read = read;
-
-	return 0;
-}
-
-/*
- * cts - parse bam file line
- *
- * returns 0 on success, 1 on expected failure.
- */
-static
-int
-parse_bam_file_line(Settings *s,
-                    samfile_t *fp,
-                    bam1_t *bam,
-                    int *bam_lane,
-                    int *bam_tile,
-                    int *bam_x,
-                    int *bam_y,
-                    int *bam_read) {
-
-    char *name;
-    const char *sep = ":#/";
-    const char *cp;
-    int lane, tile, x, y, read;
-
-    if( 0 > samread(fp, bam)) return 1;
-    
-    lane = -1;
-    tile = -1;
-    x = -1;
-    y = -1;
-
-    name = bam1_qname(bam);
-    cp = strchr(name,':');
-    if(NULL == cp){
-        fprintf(stderr,"ERROR: Invalid run in name: \"%s\"\n",name);
-        exit(EXIT_FAILURE);
-    }
-    cp++;
-    cp = parse_next_int(cp,&lane,sep);
-    cp = parse_next_int(cp,&tile,sep);
-    cp = parse_next_int(cp,&x,sep);
-    cp = parse_next_int(cp,&y,sep);
-
-    if(lane > N_LANES+1 || lane < 1){
-        fprintf(stderr,"ERROR: Invalid lane value in name: \"%s\"\n",name);
-        exit(EXIT_FAILURE);
-    }
-
-    if(tile <= 0){
-        fprintf(stderr,"ERROR: Invalid tile value in name: \"%s\"\n",name);
-        exit(EXIT_FAILURE);
-    }
-
-    read = 0;
-    if(BAM_FPAIRED & bam->core.flag){
-        if(BAM_FREAD1 & bam->core.flag)
-            read = 1;
-        if(BAM_FREAD2 & bam->core.flag)
-            read = 2;
-        if(read == 0){
-            fprintf(stderr,"ERROR: Unable to determine read from flag %d for read: \"%s\"\n",bam->core.flag,name);
-            exit(EXIT_FAILURE);
-        }
-    }
-
-    *bam_lane = lane;
-    *bam_tile = tile;
-    *bam_x = x;
-    *bam_y = y;
-    *bam_read = read;
-
-    return 0;
-}
-
-
 /*
  * cts - parse bam file line
  *
@@ -1019,10 +423,10 @@ int dump_bam_file(Settings *s, samfile_t *fp_bam, size_t *nreads)
 		int bam_lane = -1, bam_tile = -1, bam_read = -1, bam_x =
 		    -1, bam_y = -1, read_length;
 
-		if (0 != parse_bam_file_line_full(s, fp_bam, bam,
-						  &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read,
-                                                  bam_read_seq, bam_read_qual, bam_read_mismatch,
-                                                  bam_read_buff_size)) {
+		if (parse_bam_file_line(fp_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, NULL)) break;
+		if (0 != parse_bam_file_line_full(fp_bam, bam,
+                                                  bam_read_seq, bam_read_qual, NULL, bam_read_mismatch,
+                                                  bam_read_buff_size, s->snp_hash)) {
 			break;
 		}
 
@@ -1226,10 +630,10 @@ void makeRegionTable(Settings *s, samfile_t *fp_bam, int *ntiles, size_t * nread
 	while (1) {
 		int bam_lane = -1, bam_tile = -1, bam_read = -1, bam_x = -1, bam_y = -1, read_length;
 
-		if (0 != parse_bam_file_line_full(s, fp_bam, bam,
-						  &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read,
-                                                  bam_read_seq, bam_read_qual, bam_read_mismatch,
-                                                  bam_read_buff_size)) {
+		if (parse_bam_file_line(fp_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, NULL)) break;
+		if (0 != parse_bam_file_line_full(fp_bam, bam, 
+                                                  bam_read_seq, bam_read_qual, NULL, bam_read_mismatch,
+                                                  bam_read_buff_size, s->snp_hash)) {
 			break;
 		}
 
@@ -1306,8 +710,7 @@ int filter_bam(Settings * s, samfile_t * fp_in_bam, samfile_t * fp_out_bam,
 	while (1) {
 		int bam_lane = -1, bam_tile = -1, bam_read = -1, read_length, bam_x=-1, bam_y=-1;
 
-		if (0 != parse_bam_file_line(s, fp_in_bam, bam,
-                                             &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read)) {
+		if (parse_bam_file_line(fp_in_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, NULL)) {
 			break;
 		}
 
@@ -1760,19 +1163,19 @@ int main(int argc, char **argv)
 		if (override_intensity_dir)              { strcat(cmd, " -i "); strcat(cmd, override_intensity_dir); }
 		if (settings.snp_file)                   { strcat(cmd, " -s "); strcat(cmd, settings.snp_file); }
 		if (settings.filter)                     { strcat(cmd, " -F "); strcat(cmd, settings.filter); }
-		if (settings.width)                      { snprintf(arg, 64, " -width %d", settings.width);
+		if (settings.width)                      { snprintf(arg, 64, " --width %d", settings.width);
                                                            strcat(cmd, arg); }
-		if (settings.height)                     { snprintf(arg, 64, " -height %d", settings.height);
+		if (settings.height)                     { snprintf(arg, 64, " --height %d", settings.height);
                                                            strcat(cmd, arg); }
-		if (settings.region_size)                { snprintf(arg, 64, " -region_size %d", settings.region_size);
+		if (settings.region_size)                { snprintf(arg, 64, " --region_size %d", settings.region_size);
                                                            strcat(cmd, arg); }
-		if (settings.region_min_count)           { snprintf(arg, 64, " -region_min_count %d", settings.region_min_count);
+		if (settings.region_min_count)           { snprintf(arg, 64, " --region_min_count %d", settings.region_min_count);
                                                            strcat(cmd, arg); }
-		if (settings.region_mismatch_threshold)  { snprintf(arg, 64, " -region_mismatch_threshold %-6.4f", settings.region_mismatch_threshold);
+		if (settings.region_mismatch_threshold)  { snprintf(arg, 64, " --region_mismatch_threshold %-6.4f", settings.region_mismatch_threshold);
                                                            strcat(cmd, arg); }
-		if (settings.region_insertion_threshold) { snprintf(arg, 64, " -region_insertion_threshold %-6.4f", settings.region_insertion_threshold);
+		if (settings.region_insertion_threshold) { snprintf(arg, 64, " --region_insertion_threshold %-6.4f", settings.region_insertion_threshold);
                                                            strcat(cmd, arg); }
-		if (settings.region_deletion_threshold)  { snprintf(arg, 64, " -region_deletion_threshold %-6.4f", settings.region_deletion_threshold);
+		if (settings.region_deletion_threshold)  { snprintf(arg, 64, " --region_deletion_threshold %-6.4f", settings.region_deletion_threshold);
                                                            strcat(cmd, arg); }
 		strcat(cmd, " ");
 		strcat(cmd, settings.in_bam_file);
@@ -1820,7 +1223,7 @@ int main(int argc, char **argv)
 
                 /* read the snp_file */
                 if (NULL != settings.snp_file) {
-                        readSnpFile(&settings);
+                        settings.snp_hash = readSnpFile(settings.snp_file);
                         if (NULL == settings.snp_hash) {
                                 die("ERROR: reading snp file %s\n", settings.snp_file);
                         }
