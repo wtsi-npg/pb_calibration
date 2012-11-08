@@ -1546,6 +1546,7 @@ void applyFilter(Settings *s)
 	size_t nfiltered = 0;
 	Header hdr;
 	FILE *fp;
+        int read;
 
 	fp = fopen(s->filter, "rb");
 	if (!fp) die("Can't open filter file %s\n", s->filter);
@@ -1556,6 +1557,9 @@ void applyFilter(Settings *s)
 	s->region_size = hdr.region_size;
 	s->nregions_x = hdr.nregions_x;
 	s->nregions_y = hdr.nregions_y;
+
+        for (read=0;read<hdr.nreads;read++)
+                s->read_length[read] = hdr.readLength[read];
 
 	if (0 == s->compress)
 		strcat(out_mode, "u");
