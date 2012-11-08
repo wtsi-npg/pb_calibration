@@ -105,7 +105,7 @@
 
 #define PHRED_QUAL_OFFSET  33  // phred quality values offset
 
-#define REGION_MIN_COUNT            10	   // minimum coverage when setting region state
+#define REGION_MIN_COUNT            122    // minimum coverage when setting region state
 
 // assuming a region size of 700 and ~125 reads in a region, a threshold of 0.016 equates to 2 reads in a region
 #define REGION_MISMATCH_THRESHOLD   0.016  // threshold for setting region mismatch state
@@ -826,7 +826,7 @@ static void usage(int code)
 	fprintf(usagefp, "      -height height\n");
 	fprintf(usagefp, "                 Tile height\n");
         fprintf(usagefp, "      -i --intensity-dir dir\n");
-        fprintf(usagefp, "                 Intensity directory\n");
+        fprintf(usagefp, "                 (Raw) Intensity directory (to find ../ImageSize.dat)\n");
         fprintf(usagefp, "                 required unless tile width and height are supplied\n");
 	fprintf(usagefp, "      -s --snp_file file\n");
 	fprintf(usagefp, "                 set of snps to be removed\n");

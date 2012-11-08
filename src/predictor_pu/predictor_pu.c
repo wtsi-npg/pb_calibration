@@ -57,6 +57,9 @@
 #include "pb_config.h"
 #endif
 
+#ifdef HAVE_PREAD
+# define _XOPEN_SOURCE 500 // for pread
+#endif
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
@@ -99,7 +102,6 @@
 #define N_STATES 2
 
 #define PHRED_QUAL_OFFSET 33  // phred quality values offset
-#define ILL_QUAL_OFFSET   64  // illumina quality values offset
 
 typedef struct {
     int         tile;
@@ -575,6 +577,14 @@ static int get_cif_dirs(Settings *s) {
     }
 }
 
+
+#ifdef HAVE_PREAD
+
+# warning "trying to use system pread"
+# define pread_bytes pread
+
+#else
+# warning "using Rob's(?) pread"
 /* Read count bytes at position offset in file fd.  It actually emulates
    pread(2) as the real thing doesn't seem to be any faster, and it
    may not be present. */
@@ -593,6 +603,7 @@ static ssize_t pread_bytes(int fd, void *buf, size_t count, off_t offset) {
     } while (res > 0 && total < count);
     return res < 0 ? res : total;
 }
+#endif
 
 static void read_cif_chunk(Settings *s, CifCycleData *cycle, size_t spot_num) {
     size_t num_entries;

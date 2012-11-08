@@ -67,7 +67,7 @@ initialise ()
                        echo "                   ";
                        echo "       -spatial_filter     apply spatial filtering to the bam files";
                        echo "                   ";
-                       echo "       -intensity_dir <intensity directory>";
+                       echo "       -intensity_dir <raw intensity directory>";
                        echo "                   ";
                        echo "       -sf_parms <spatial_filter parameters>";
                        echo "                             no default";

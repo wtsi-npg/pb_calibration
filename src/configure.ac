@@ -15,7 +15,7 @@ AC_C_INLINE
 
 dnl Functions
 AX_FUNC_ASPRINTF
-AC_CHECK_FUNCS(popen)
+AC_CHECK_FUNCS(pread)
 
 dnl Large file support
 AC_SYS_LARGEFILE
