@@ -284,7 +284,7 @@ static int restoreCalTable(Settings *s, const char* calibrationFile, HashTable *
             if( s->spatial_filter ){
                 if( tile == 1 ) fprintf(stderr, "bad region read=%d cycle=%3d\n", read, cycle);
             }else{
-                if( tile < 0 ) fprintf(stderr, "bad tile=%4d read=%d cycle=%3d\n", tile, read, cycle);
+                if( tile > 0 ) fprintf(stderr, "bad tile=%4d read=%d cycle=%3d\n", tile, read, cycle);
             }
             
             /* current ct is the new ct */
