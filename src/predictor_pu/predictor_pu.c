@@ -57,6 +57,9 @@
 #include "pb_config.h"
 #endif
 
+#ifdef HAVE_PREAD
+# define _XOPEN_SOURCE 500 // for pread
+#endif
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
@@ -88,6 +91,8 @@
 #include <aprintf.h>
 #include <die.h>
 #include <rts.h>
+#include <shared.h>
+#include <parse_bam.h>
 
 #include <version.h>
 
@@ -97,7 +102,6 @@
 #define N_STATES 2
 
 #define PHRED_QUAL_OFFSET 33  // phred quality values offset
-#define ILL_QUAL_OFFSET   64  // illumina quality values offset
 
 typedef struct {
     int         tile;
@@ -167,15 +171,6 @@ typedef struct {
     size_t        num_spots;
 } CifData;
 
-
-static
-void
-checked_chdir(const char* dir){
-    if(chdir(dir)){
-        fprintf(stderr,"ERROR: failed to change directory to: %s\n",dir);
-        exit(EXIT_FAILURE);
-    }
-}
 
 static void initialiseCalTable(CalTable *ct, int tile, int read, int cycle)
 {
@@ -284,7 +279,7 @@ static int restoreCalTable(Settings *s, const char* calibrationFile, HashTable *
             if( s->spatial_filter ){
                 if( tile == 1 ) fprintf(stderr, "bad region read=%d cycle=%3d\n", read, cycle);
             }else{
-                if( tile < 0 ) fprintf(stderr, "bad tile=%4d read=%d cycle=%3d\n", tile, read, cycle);
+                if( tile > 0 ) fprintf(stderr, "bad tile=%4d read=%d cycle=%3d\n", tile, read, cycle);
             }
             
             /* current ct is the new ct */
@@ -372,229 +367,6 @@ int Get_bin_purity(CalTable *ct, int value)
     ibin = ct->ibin[value];
     return ibin;
 }
-
-/**
- * Reverses the direction of the array of ints
- *
- * @param int is the input array. <b>NB.</b> this is destructively modified.
- *
- * @returns a pointer to the original storage but with the contents
- * modified
- */
-int *
-reverse_int(int *num, int n)
-{
-    int *t = num, *s = num + n - 1;
-    int c;
-
-    while (t < s) {
-        c = *s;
-        *s = *t;
-        *t = c;
-        t++;
-        s--;
-    }
-
-    return num;
-}
-
-
-// lifted from /nfs/users/nfs_j/jkb/work/tracetools/sequtil/seq_ops.c
-
-/**
- * Reverses the direction of the string.
- *
- * @param seq is the input sequence. <b>NB.</b> this is destructively modified.
- *
- * @returns a pointer to the original string storage but with the contents
- * modified
- */
-char *
-reverse_seq(char *seq)
-{
-    char *t = seq, *s = seq + strlen(seq) - 1;
-    char c;
-
-    while (t < s) {
-        c = *s;
-        *s = *t;
-        *t = c;
-        t++;
-        s--;
-    }
-
-    return seq;
-}
-
-/* cts -simplification of parse_4_int code for single int parse
- */
-inline static
-const char *
-parse_next_int(const char *str, int *val, const char *sep) {
-    const static char spaces[256] = {
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-    };
-
-    const char* const start = str;
-    int minus = 0;
-    int ival = 0;
-    char c;
-
-    if (NULL == sep) {
-        while (*str && spaces[(unsigned) *str]) ++str;
-    } else {
-        while (*str && NULL != strchr(sep, *str)) ++str;
-    }
-
-    c = *str;
-
-    if (!c) {
-      /*
-        fprintf(stderr, "Error: expected to parse int from string \"%s\"\n", start);
-        exit(EXIT_FAILURE);
-	*/
-      return NULL;
-    }
-
-    if (c == '-' || c == '+') {
-        minus = (c == '-');
-        c = *++str;
-    }
-    
-    while (c >= '0' && c <= '9') {
-        ival = ival * 10 + (c-'0');
-        c = *++str;
-    }
-
-    if (NULL == sep) {
-        switch(c) {
-        case '\n': case '\r': case '\t': case ' ': case '\0':
-            if (minus) ival = -ival;
-            *val = ival;
-            return str;
-        }
-    } else {
-        if (NULL != strchr(sep, *str)) {
-            if (minus) ival = -ival;
-            *val = ival;
-            return str;
-        }
-    }
-    fprintf(stderr, "Error: expected to parse int from string \"%s\"\n", start);
-    exit(EXIT_FAILURE);
-}
-
-
-/*
- * cts - parse bam file line
- *
- * returns 0 on success, 1 on expected failure.
- */
-static
-int
-parse_bam_file_line(Settings *s,
-                    samfile_t *fp,
-                    bam1_t *bam,
-                    int *bam_lane,
-                    int *bam_tile,
-                    int *bam_x,
-                    int *bam_y,
-                    size_t *bam_offset,
-                    int *bam_read) {
-
-    char *name;
-    uint8_t *ci_ptr;
-    const char *sep = ":#/";
-    const char *cp;
-    int lane, tile, x, y, offset, read;
-
-    if( 0 > samread(fp, bam)) return 1;
-    
-    lane = -1;
-    tile = -1;
-    x = -1;
-    y = -1;
-    offset = -1;
-
-    name = bam1_qname(bam);
-    cp = strchr(name,':');
-    if(NULL == cp){
-        fprintf(stderr,"ERROR: Invalid run in name: \"%s\"\n",name);
-        exit(EXIT_FAILURE);
-    }
-    cp++;
-    cp = parse_next_int(cp,&lane,sep);
-    cp = parse_next_int(cp,&tile,sep);
-    cp = parse_next_int(cp,&x,sep);
-    cp = parse_next_int(cp,&y,sep);
-
-    /* look for ci tag */
-    ci_ptr = bam_aux_get(bam, "ci");
-    if (NULL == ci_ptr){
-        /* no ci tag get offset from name */
-        cp = parse_next_int(cp,&offset,sep);
-        if(NULL == cp){
-            fprintf(stderr,"ERROR: No ci tag and no offset in name: \"%s\"\n",name);
-            exit(EXIT_FAILURE);
-        }
-    }else{
-        offset = bam_aux2i(ci_ptr);
-        /* name offset is 0 based but ci is 1 based */
-        offset--;
-    }
-       
-    if(lane > N_LANES+1 || lane < 1){
-        fprintf(stderr,"ERROR: Invalid lane value in name: \"%s\"\n",name);
-        exit(EXIT_FAILURE);
-    }
-
-    if(tile <= 0){
-        fprintf(stderr,"ERROR: Invalid tile value in name: \"%s\"\n",name);
-        exit(EXIT_FAILURE);
-    }
-
-    if(offset < 0){
-        fprintf(stderr,"ERROR: Invalid offset value in name: \"%s\"\n",name);
-        exit(EXIT_FAILURE);
-    }
-
-    read = 0;
-    if(BAM_FPAIRED & bam->core.flag){
-        if(BAM_FREAD1 & bam->core.flag)
-            read = 1;
-        if(BAM_FREAD2 & bam->core.flag)
-            read = 2;
-        if(read == 0){
-            fprintf(stderr,"ERROR: Unable to determine read from flag %d for read: \"%s\"\n",bam->core.flag,name);
-            exit(EXIT_FAILURE);
-        }
-    }
-
-    *bam_lane = lane;
-    *bam_tile = tile;
-    *bam_x = x;
-    *bam_y = y;
-    *bam_offset = offset;
-    *bam_read = read;
-
-    return 0;
-}
-
 
 /* copied from sam.c */
 
@@ -805,6 +577,14 @@ static int get_cif_dirs(Settings *s) {
     }
 }
 
+
+#ifdef HAVE_PREAD
+
+# warning "trying to use system pread"
+# define pread_bytes pread
+
+#else
+# warning "using Rob's(?) pread"
 /* Read count bytes at position offset in file fd.  It actually emulates
    pread(2) as the real thing doesn't seem to be any faster, and it
    may not be present. */
@@ -823,6 +603,7 @@ static ssize_t pread_bytes(int fd, void *buf, size_t count, off_t offset) {
     } while (res > 0 && total < count);
     return res < 0 ? res : total;
 }
+#endif
 
 static void read_cif_chunk(Settings *s, CifCycleData *cycle, size_t spot_num) {
     size_t num_entries;
@@ -1194,8 +975,8 @@ int recalibrate_bam(Settings *s, HashTable *ct_hash, samfile_t *fp_in_bam, samfi
         int bam_lane = -1, bam_tile = -1, bam_x = -1, bam_y = -1, bam_read = -1, read_length;
         size_t bam_offset = 0;
 
-        if (0 != parse_bam_file_line(s, fp_in_bam, bam,
-                                     &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_offset, &bam_read)) {
+        if (0 != parse_bam_file_line(fp_in_bam, bam,
+                                     &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, &bam_offset)) {
             break;
         }
 
