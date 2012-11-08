@@ -1312,12 +1312,7 @@ int filter_bam(Settings * s, samfile_t * fp_in_bam, samfile_t * fp_out_bam,
 		}
 
 		read_length = bam->core.l_qseq;
-		if (0 == read_length)
-			continue;
 
-		if (0 == s->read_length[bam_read]) {
-			s->read_length[bam_read] = read_length;
-		}
 		if (s->read_length[bam_read] != read_length) {
 			die("Error: inconsistent read lengths within bam file for read %d.\n"
 			    "have length %ld, previously it was %d.\n",
@@ -1546,6 +1541,7 @@ void applyFilter(Settings *s)
 	size_t nfiltered = 0;
 	Header hdr;
 	FILE *fp;
+        int read;
 
 	fp = fopen(s->filter, "rb");
 	if (!fp) die("Can't open filter file %s\n", s->filter);
@@ -1556,6 +1552,9 @@ void applyFilter(Settings *s)
 	s->region_size = hdr.region_size;
 	s->nregions_x = hdr.nregions_x;
 	s->nregions_y = hdr.nregions_y;
+
+        for (read=0;read<hdr.nreads;read++)
+                s->read_length[read] = hdr.readLength[read];
 
 	if (0 == s->compress)
 		strcat(out_mode, "u");
