@@ -1,8 +1,8 @@
 
 noinst_LIBRARIES = libhelper_funcs.a
 
-libhelper_funcs_a_SOURCES = aprintf.c die.c smalloc.c rts.c shared.c snp.c parse_bam.c \
-                            aprintf.h die.h smalloc.h rts.h shared.h snp.h parse_bam.h
+libhelper_funcs_a_SOURCES = aprintf.c die.c smalloc.c rts.c shared.c snp.c parse_bam.c cif.c \
+                            aprintf.h die.h smalloc.h rts.h shared.h snp.h parse_bam.h cif.h
 
 INCLUDES = @IO_LIB_CFLAGS@ @SAMTOOLS_CFLAGS@
 
