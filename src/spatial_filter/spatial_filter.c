@@ -420,19 +420,21 @@ int dump_bam_file(Settings *s, samfile_t *fp_bam, size_t *nreads)
 
 	/* loop over reads in the bam file */
 	while (1) {
-		int bam_lane = -1, bam_tile = -1, bam_read = -1, bam_x =
-		    -1, bam_y = -1, read_length;
+		int bam_lane = -1, bam_tile = -1, bam_read = -1, bam_x = -1, bam_y = -1;
 
-		if (parse_bam_file_line(fp_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, NULL)) break;
-		if (0 != parse_bam_file_line_full(fp_bam, bam,
-                                                  bam_read_seq, bam_read_qual, NULL, bam_read_mismatch,
-                                                  bam_read_buff_size, s->snp_hash)) {
+		if (parse_bam_runinfo(fp_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, NULL)) {
+			/* break on end of BAM file */
 			break;
 		}
-
-		read_length = strlen(bam_read_seq);
-		if (0 == read_length)
-			continue;
+		if (BAM_FUNMAP & bam->core.flag) continue;
+		if (BAM_FQCFAIL & bam->core.flag) continue;
+		if (BAM_FPAIRED & bam->core.flag) {
+			if (0 == (BAM_FPROPER_PAIR & bam->core.flag)) {
+				continue;
+			}
+		}
+		parse_bam_alignments(fp_bam, bam, bam_read_seq, bam_read_qual, NULL, bam_read_mismatch,
+                                                  bam_read_buff_size, s->snp_hash);
 
 		char *name = bam1_qname(bam);
 		uint8_t *oq_ptr;
@@ -630,17 +632,22 @@ void makeRegionTable(Settings *s, samfile_t *fp_bam, int *ntiles, size_t * nread
 	while (1) {
 		int bam_lane = -1, bam_tile = -1, bam_read = -1, bam_x = -1, bam_y = -1, read_length;
 
-		if (parse_bam_file_line(fp_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, NULL)) break;
-		if (0 != parse_bam_file_line_full(fp_bam, bam, 
-                                                  bam_read_seq, bam_read_qual, NULL, bam_read_mismatch,
-                                                  bam_read_buff_size, s->snp_hash)) {
-			break;
+		if (parse_bam_runinfo(fp_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, NULL)) {
+			break;	/* break on end of BAM file */
 		}
 
-		read_length = strlen(bam_read_seq);
-		if (0 == read_length)
-			continue;
+		if (BAM_FUNMAP & bam->core.flag) continue;
+		if (BAM_FQCFAIL & bam->core.flag) continue;
+		if (BAM_FPAIRED & bam->core.flag) {
+			if (0 == (BAM_FPROPER_PAIR & bam->core.flag)) {
+				continue;
+			}
+		}
 
+		parse_bam_alignments(fp_bam, bam, bam_read_seq, bam_read_qual, NULL, bam_read_mismatch,
+                                                  bam_read_buff_size, s->snp_hash);
+
+		read_length = strlen(bam_read_seq);
 		if (0 == s->read_length[bam_read]) {
 			s->read_length[bam_read] = read_length;
    	                initRTS(N_TILES, s->nregions, bam_read, read_length);
@@ -710,8 +717,8 @@ int filter_bam(Settings * s, samfile_t * fp_in_bam, samfile_t * fp_out_bam,
 	while (1) {
 		int bam_lane = -1, bam_tile = -1, bam_read = -1, read_length, bam_x=-1, bam_y=-1;
 
-		if (parse_bam_file_line(fp_in_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, NULL)) {
-			break;
+		if (parse_bam_runinfo(fp_in_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, NULL)) {
+			break;	/* break on end of BAM file */
 		}
 
 		read_length = bam->core.l_qseq;

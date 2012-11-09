@@ -1340,15 +1340,20 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
         size_t bam_offset = 0;
         int cycle;
 
-        if (0 != parse_bam_file_line(fp_bam, bam,
-                                     &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, &bam_offset))
-            break;
+        if (parse_bam_runinfo(fp_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, &bam_offset)) {
+            break;	/* break on end of BAM file */
+		}
 
-        if (0 != parse_bam_file_line_full(fp_bam, bam,
-                                     bam_read_seq, bam_read_qual, bam_read_ref,
-                                     bam_read_mismatch, bam_read_buff_size,s->snp_hash)) {
-            break;
+        if (BAM_FUNMAP & bam->core.flag) continue;
+        if (BAM_FQCFAIL & bam->core.flag) continue;
+        if (BAM_FPAIRED & bam->core.flag) {
+            if (0 == (BAM_FPROPER_PAIR & bam->core.flag)) {
+                continue;
+            }
         }
+
+        parse_bam_alignments(fp_bam, bam, bam_read_seq, bam_read_qual, bam_read_ref,
+                                     bam_read_mismatch, bam_read_buff_size,s->snp_hash);
 
         read_length = strlen(bam_read_seq);
         if (0 == read_length) continue;
