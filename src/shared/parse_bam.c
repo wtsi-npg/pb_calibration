@@ -11,7 +11,7 @@
  *
  * returns 0 on success, 1 on expected failure.
  */
-int parse_bam_file_line( samfile_t *fp,
+int parse_bam_runinfo( samfile_t *fp,
                     bam1_t *bam,
                     int *bam_lane,
                     int *bam_tile,
@@ -89,7 +89,7 @@ int parse_bam_file_line( samfile_t *fp,
  * returns 0 on success, 1 on expected failure, 2 to ignore this entry.
  */
 int
-parse_bam_file_line_full(
+parse_bam_alignments(
              samfile_t *fp,
              bam1_t *bam,
              char *read_seq,
@@ -114,21 +114,6 @@ parse_bam_file_line_full(
         return 1;
 
     read_seq[0] = 0;
-
-    if (BAM_FUNMAP & bam->core.flag) return 0;
-
-#ifdef QC_FAIL
-    if (BAM_FQCFAIL & bam->core.flag) {
-        return 0;
-}
-#endif
-#ifdef PROPERLY_PAIRED
-    if (BAM_FPAIRED & bam->core.flag) {
-        if (0 == (BAM_FPROPER_PAIR & bam->core.flag)) {
-            return 0;
-    }
-}
-#endif
 
     name = bam1_qname(bam);
     pos = bam->core.pos;
