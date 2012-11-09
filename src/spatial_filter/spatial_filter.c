@@ -1193,7 +1193,7 @@ int main(int argc, char **argv)
 		strcat(cmd, argv[0]);
 		strcat(cmd, " -a ");
 		if (settings.qcfail)   { strcat(cmd, " -f "); }
-		if (settings.compress) { strcat(cmd, " -u "); }
+		if (!settings.compress) { strcat(cmd, " -u "); }
 		if (settings.output)   { strcat(cmd, " -o "); strcat(cmd, settings.output); }
 		if (settings.filter)   { strcat(cmd, " -F "); strcat(cmd, settings.filter); }
 		strcat(cmd, " ");
