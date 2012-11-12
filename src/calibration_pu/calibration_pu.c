@@ -93,8 +93,6 @@
 #include <assert.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <glob.h>
-#include <regex.h>
 #include <stdarg.h>
 
 /* To turn off assert for a small speed gain, uncomment this line */
@@ -116,6 +114,7 @@
 #include <shared.h>
 #include <snp.h>
 #include <parse_bam.h>
+#include <cif.h>
 
 #include <version.h>
 
@@ -164,23 +163,12 @@ typedef struct {
 } CalTable;
 
 typedef struct {
-    long        lane;
-    long        cycle;
-    long        read;
-    const char *dir;
-} CifDir;
-
-typedef struct {
     char *cmdline;
     char *prefix;
     char *intensity_dir;
     char *snp_file;
     HashTable *snp_hash;
     char *working_dir;
-    CifDir *cif_dirs;
-    size_t  n_cif_dirs;
-    size_t *cif_lane_index;
-    size_t  n_cif_lanes;
     int read_length[3];
     int cstart[3];
     int quiet;
@@ -192,33 +180,6 @@ typedef struct {
     int n_bins_left;
     int n_bins_right;
 } Settings;
-
-typedef union {
-    int8_t  *i8;
-    int16_t *i16;
-    int32_t *i32;
-} ChanData;
-
-typedef struct {
-    char *filename;
-    int fd;
-    int data_type;
-    int num_channels;
-    int cycle_number;
-    off_t  cycle_start_pos;
-    size_t num_entries;
-    size_t chunk_num_entries;
-    size_t chunk_start;
-    ChanData *chan_data;
-} CifCycleData;
-
-typedef struct {
-    CifCycleData *cycles;
-    size_t        ncycles;
-    size_t        size;
-    size_t        num_spots;
-} CifData;
-
 
 static void initialiseSurvTable(Settings *s, SurvTable *st, int tile, int read, int cycle)
 {
@@ -793,119 +754,6 @@ float GetPu (int n, int data[])
     return (float)Imax/(float)Isum;
 }
 
-int cif_dir_compare(const void *va, const void *vb) {
-    const CifDir *a = (const CifDir *) va;
-    const CifDir *b = (const CifDir *) vb;
-    
-    if (a->lane  < b->lane)  return -1;
-    if (a->lane  > b->lane)  return  1;
-    if (a->read  < b->read)  return -1;
-    if (a->read  > b->read)  return  1;
-    if (a->cycle < b->cycle) return -1;
-    if (a->cycle > b->cycle) return  1;
-    return strcmp(a->dir, b->dir);
-}
-
-static int get_cif_dirs(Settings *s) {
-    char   *pattern = NULL;
-    size_t  pattern_sz = 0;
-    glob_t  glob_buf;
-    CifDir *cif_dirs;
-    size_t *lane_index;
-    regex_t    re;
-    regmatch_t matches[4];
-    size_t  ndirs;
-    size_t  i, l;
-    long    max_lane = 0;
-    int     res;
-
-    pattern_sz = strlen(s->intensity_dir) + 30;
-    pattern    = smalloc(pattern_sz);
-
-    snprintf(pattern, pattern_sz,
-             "%s/L*/C*", s->intensity_dir);
-
-    memset(&glob_buf, 0, sizeof(glob_buf));
-    memset(&re,       0, sizeof(re));
-
-    res = glob(pattern,
-               GLOB_ERR|GLOB_NOSORT|GLOB_NOESCAPE, NULL, &glob_buf);
-    if (0 != res) {
-        if (GLOB_NOMATCH != res) {
-            perror("Looking for CIF directories");
-        }
-        globfree(&glob_buf);
-        free(pattern);
-        return -1;
-    }
-    
-    cif_dirs = smalloc(glob_buf.gl_pathc * sizeof(CifDir));
-
-    res = regcomp(&re, "/L([[:digit:]]+)/C([[:digit:]]+)\\.([[:digit:]]+)/*$",
-                  REG_EXTENDED);
-    if (0 != res) goto regerr;
-    
-    for (ndirs = 0, i = 0; i < glob_buf.gl_pathc; i++) {
-        const char *p = glob_buf.gl_pathv[i];
-
-        res = regexec(&re, p, sizeof(matches)/sizeof(matches[0]), matches, 0);
-        if (REG_NOMATCH == res) continue;
-        if (0 != res) goto regerr;
-        
-        cif_dirs[ndirs].lane  = strtol(p + matches[1].rm_so, NULL, 10);
-        cif_dirs[ndirs].cycle = strtol(p + matches[2].rm_so, NULL, 10);
-        cif_dirs[ndirs].read  = strtol(p + matches[3].rm_so, NULL, 10);
-        cif_dirs[ndirs].dir   = strdup(p);
-        if (NULL == cif_dirs[ndirs].dir) goto nomem;
-        if (cif_dirs[ndirs].lane > max_lane) max_lane = cif_dirs[ndirs].lane;
-        ndirs++;
-    }
-    regfree(&re);
-    globfree(&glob_buf);
-
-    if (0 == ndirs) {
-        free(cif_dirs);
-        return -1;
-    }
-
-    qsort(cif_dirs, ndirs, sizeof(*cif_dirs), cif_dir_compare);
-
-    lane_index = scalloc(max_lane + 2, sizeof(*lane_index));
-
-    for (i = 0, l = 0; i < ndirs; i++) {
-        if (cif_dirs[i].lane > l) {
-            long j;
-
-            for (j = l + 1; j <= cif_dirs[i].lane; j++) {
-                lane_index[j] = i;
-            }
-            l = cif_dirs[i].lane;
-        }
-    }
-    lane_index[l + 1] = ndirs;
-
-    s->cif_dirs       = cif_dirs;
-    s->n_cif_dirs     = ndirs;
-    s->cif_lane_index = lane_index;
-    s->n_cif_lanes    = max_lane;
-
-    return 0;
-
- nomem:
-    perror("get_cif_dirs");
-    exit(EXIT_FAILURE);
-
- regerr:
-    {
-        char msg[1024];
-        regerror(res, &re, msg, sizeof(msg));
-        fprintf(stderr,
-                "Regular expression search failed in get_cif_dirs: %s\n",
-                msg);
-        exit(EXIT_FAILURE);
-    }
-}
-
 #ifdef HAVE_PREAD
 
 # warning "trying to use system pread"
@@ -932,229 +780,6 @@ static ssize_t pread_bytes(int fd, void *buf, size_t count, off_t offset) {
     return res < 0 ? res : total;
 }
 #endif
-
-static void read_cif_chunk(Settings *s, CifCycleData *cycle, size_t spot_num) {
-    size_t num_entries;
-    size_t num_bytes;
-    size_t chan_size_bytes;
-    ssize_t got;
-    off_t  file_pos;
-    int chan;
-    
-    assert(spot_num < cycle->num_entries);
-    if (spot_num >= cycle->chunk_start
-        && spot_num < cycle->chunk_start + cycle->chunk_num_entries) {
-        return;
-    }
-
-    chan_size_bytes  = cycle->num_entries * cycle->data_type;
-    num_entries  = (cycle->num_entries - spot_num < cycle->chunk_num_entries
-                    ? cycle->num_entries - spot_num
-                    : cycle->chunk_num_entries);
-    num_bytes = num_entries * cycle->data_type;
-
-    if (NULL == cycle->chan_data) {
-        size_t chunk_size_bytes = cycle->chunk_num_entries * cycle->data_type;
-        cycle->chan_data = smalloc(cycle->num_channels * sizeof(cycle->chan_data[0]));
-        for (chan = 0; chan < cycle->num_channels; chan++) {
-            cycle->chan_data[chan].i8 = smalloc(chunk_size_bytes);
-        }
-    }
-
-    for (chan = 0; chan < cycle->num_channels; chan++) {
-        file_pos = (cycle->cycle_start_pos
-                    + chan_size_bytes * chan
-                    + spot_num * cycle->data_type);
-        got = pread_bytes(cycle->fd, cycle->chan_data[chan].i8, num_bytes, file_pos);
-        if (got < 0) {
-            die("Error reading %s: %s\n", cycle->filename, strerror(errno));
-        }
-        if (got < num_bytes) {
-            die("Error: Did not get the expected amount of data from %s\n",
-                cycle->filename);
-        }
-    }
-    cycle->chunk_start = spot_num;
-
-#ifdef WORDS_BIGENDIAN
-    /* CIF files are little-endian, so we need to switch everything
-       around on big-endian machines */
-    switch (cycle->data_type) {
-    case 1:
-        break;
-    case 2:
-        for (chan = 0; chan < cycle->num_channels; chan++) {
-            size_t i;
-            int16_t *d = cycle->chan_data[chan].i16;
-            for (i = 0; i < num_entries; i++) {
-                d[i] = bswap_16(d[i]);
-            }
-        }
-        break;
-    case 4:
-        for (chan = 0; chan < cycle->num_channels; chan++) {
-            size_t i;
-            int32_t *d = cycle->chan_data[chan].i32;
-            for (i = 0; i < num_entries; i++) {
-                d[i] = bswap_32(d[i]);
-            }
-        }
-        break;
-    default:
-        die("Unexpected data type in CIF file %s\n", cycle->filename);
-    }
-#endif
-}
-
-static int read_cif_file(char *name, int fd, CifData *cif_data) {
-    uint8_t cif_header[13];
-    int    num_cycles;
-    int    first_cycle;
-    int    num_channels = 4;
-    size_t num_entries;
-    size_t chunk_num_entries;
-    size_t cycle_size_bytes;
-    off_t  cycle_start_pos = sizeof(cif_header);
-    int    data_type;
-    CifCycleData *cycle;
-    size_t i;
-    
-    if (sizeof(cif_header)
-        != pread_bytes(fd, cif_header, sizeof(cif_header), 0)) return -1;
-    if (0 != memcmp(cif_header, "CIF", 3))                 return -1;
-    if (cif_header[3] != '\1')                             return -1;
-
-    data_type   = cif_header[4];
-    first_cycle = cif_header[5] | (cif_header[6] << 8);
-    num_cycles  = cif_header[7] | (cif_header[8] << 8);
-    num_entries = (cif_header[9]
-                   | (cif_header[10] << 8)
-                   | (cif_header[11] << 16)
-                   | (cif_header[12] << 24));
-
-    if (0 == cif_data->num_spots) {
-        cif_data->num_spots = num_entries;
-    } else if (cif_data->num_spots != num_entries) {
-        fprintf(stderr, "Got unexpected number of entries in CIF file %s\n"
-                "Expected: %zd; Got %zd\n",
-                name, cif_data->num_spots, num_entries);
-    }
-    if (data_type < 1 || data_type > 4) {
-        die("Unexpected data_type in CIF file %s\n", name);
-    }
-
-    chunk_num_entries = MAX_CIF_CHUNK_BYTES / (data_type * num_channels);
-    if (chunk_num_entries > num_entries) chunk_num_entries = num_entries;
-    cycle_size_bytes = num_entries * data_type * num_channels;
-
-    for (i = 0; i < num_cycles; i++) {
-        if (cif_data->ncycles == cif_data->size) {
-            cif_data->size = cif_data->size > 0 ? cif_data->size * 2 : 128;
-            cif_data->cycles = srealloc(cif_data->cycles,
-                                        cif_data->size * sizeof(CifCycleData));
-        }
-        
-        cycle = cif_data->cycles + cif_data->ncycles;
-        
-        cycle->filename     = sstrdup(name);
-        cycle->fd           = fd;
-        cycle->data_type    = data_type;
-        cycle->num_channels = num_channels;
-        cycle->cycle_number = i + first_cycle;
-        cycle->cycle_start_pos = cycle_start_pos + i * cycle_size_bytes;
-        cycle->num_entries  = num_entries;
-        cycle->chunk_num_entries = chunk_num_entries;
-        cycle->chunk_start  = num_entries; /* Will force first load */
-        cycle->chan_data    = NULL; /* Allocate memory on first load */
-
-        cif_data->ncycles++;
-    }
-
-    return 0;
-}
-
-static CifData *load_cif_data(Settings *s, int lane, int tile, char *suffix) {
-    char *cif_file = NULL;
-    size_t cif_file_sz = strlen(s->intensity_dir) + strlen(suffix) + 100;
-    size_t first_dir;
-    size_t end_dir;
-    size_t i;
-    int cif = -1;
-    CifData *cif_data = NULL;
-    
-    cif_file = smalloc(cif_file_sz);
-
-    cif_data = scalloc(1, sizeof(CifData));
-
-    first_dir = (lane <= s->n_cif_lanes
-                 ? s->cif_lane_index[lane]
-                 : s->cif_lane_index[s->n_cif_lanes + 1]);
-    end_dir = (lane <= s->n_cif_lanes
-               ? s->cif_lane_index[lane + 1]
-               : s->cif_lane_index[s->n_cif_lanes + 1]);
-
-    for (i = first_dir; i < end_dir; i++) {
-        snprintf(cif_file, cif_file_sz,
-                 "%s/s_%d_%d.%s", s->cif_dirs[i].dir, lane, tile, suffix);
-        cif = open(cif_file, O_RDONLY);
-        if (cif < 0) {
-            if (ENOENT == errno) continue;
-            die("Couldn't open %s : %s\n", cif_file, strerror(errno));
-        }
-
-        if (0 != read_cif_file(cif_file, cif, cif_data)) {
-            die("Error reading %s\n", cif_file);
-        }
-    }
-
-    free(cif_file);
-
-    /* Check we have a full set of cycles */
-    for (i = 0; i < cif_data->ncycles; i++) {
-        if (cif_data->cycles[i].cycle_number > i + 1) {
-            die("Error: Missing cycle %zd for lane %d tile %d"
-                " from CIF files.\n", i + 1, lane, tile);
-        } else if (cif_data->cycles[i].cycle_number != i + 1) {
-            die("Error: Unexpected cycle number %d for lane %d tile %d"
-                " from CIF files.\n", cif_data->cycles[i].cycle_number,
-                lane, tile);
-        }
-    }
-
-    return cif_data;
-}
-
-static void free_cif_data(CifData *cif_data) {
-    size_t i;
-    int c;
-
-    if (NULL == cif_data->cycles)
-        return;
-    
-    for (i = 0; i < cif_data->ncycles; i++) {
-        if (NULL != cif_data->cycles[i].chan_data) {
-            for (c = 0; c < cif_data->cycles[i].num_channels; c++) {
-                if (NULL != cif_data->cycles[i].chan_data[c].i8)
-                    free(cif_data->cycles[i].chan_data[c].i8);
-            }
-            free(cif_data->cycles[i].chan_data);
-        }
-        if (0 < cif_data->cycles[i].fd) {
-            if (0 != close(cif_data->cycles[i].fd)) {
-                if (NULL != cif_data->cycles[i].filename)
-                    die("Error when closing %s: %s\n", cif_data->cycles[i].filename, strerror(errno));
-                else
-                    die("Error when closing cif file: %s\n", strerror(errno));
-            }
-        }
-        if (NULL != cif_data->cycles[i].filename)
-            free(cif_data->cycles[i].filename);
-    }
-
-    free(cif_data->cycles);
-    
-    free(cif_data);
-}
 
 static int updateSurvTable(Settings *s, SurvTable **sts, CifData *cif_data,
                            size_t spot_num, int tile, int x, int y, int read, int *read_mismatch,
@@ -1196,7 +821,7 @@ static int updateSurvTable(Settings *s, SurvTable **sts, CifData *cif_data,
             st = sts[read] + b;
         }
 
-        read_cif_chunk(s, cycle, spot_num);
+        read_cif_chunk(cycle, spot_num);
         for (channel = 0; channel < cycle->num_channels; channel++) {
             size_t base_pos = spot_num - cycle->chunk_start;
             switch (cycle->data_type) {
@@ -1340,7 +965,7 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
         size_t bam_offset = 0;
         int cycle;
 
-        if (parse_bam_runinfo(fp_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, &bam_offset)) {
+        if (parse_bam_readinfo(fp_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, &bam_offset)) {
             break;	/* break on end of BAM file */
 		}
 
@@ -1402,7 +1027,7 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
             /* Look for processed trace data */
 
             if (NULL != cif_data) free_cif_data(cif_data);
-            cif_data = load_cif_data(s, lane, tile, "dif");
+            cif_data = load_cif_data(lane, tile, "dif");
 
             /* Check that we actually got some trace data */
             if (NULL == cif_data) {
@@ -1654,10 +1279,6 @@ int main(int argc, char **argv) {
     settings.read_length[1] = 0;
     settings.read_length[2] = 0;
     settings.working_dir = NULL;
-    settings.cif_dirs       = NULL;
-    settings.n_cif_dirs     = 0;
-    settings.cif_lane_index = NULL;
-    settings.n_cif_lanes    = 0;
     
     settings.cmdline = get_command_line(argc, argv);
 
@@ -1801,7 +1422,7 @@ int main(int argc, char **argv) {
     }
 
     /* Look for CIF directories */
-    get_cif_dirs(&settings);
+    get_cif_dirs(settings.intensity_dir);
 
     /* open the bam file */
     bam_file = argv[i++];
@@ -1852,8 +1473,6 @@ int main(int argc, char **argv) {
     freeCalTable(&settings, cts);
 
     freeSurvTable(&settings, sts);
-
-    if (NULL != settings.cif_dirs) free(settings.cif_dirs);
 
     if (NULL != settings.working_dir) free(settings.working_dir);
 
