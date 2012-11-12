@@ -11,7 +11,7 @@
  *
  * returns 0 on success, 1 on expected failure.
  */
-int parse_bam_runinfo( samfile_t *fp,
+int parse_bam_readinfo( samfile_t *fp,
                     bam1_t *bam,
                     int *bam_lane,
                     int *bam_tile,

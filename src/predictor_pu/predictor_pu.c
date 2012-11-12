@@ -574,7 +574,7 @@ int recalibrate_bam(Settings *s, HashTable *ct_hash, samfile_t *fp_in_bam, samfi
         int bam_lane = -1, bam_tile = -1, bam_x = -1, bam_y = -1, bam_read = -1, read_length;
         size_t bam_offset = 0;
 
-        if (parse_bam_runinfo(fp_in_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, &bam_offset)) {
+        if (parse_bam_readinfo(fp_in_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, &bam_offset)) {
             break;	/* break on end of BAM file */
         }
 
