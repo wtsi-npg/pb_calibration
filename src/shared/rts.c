@@ -168,32 +168,3 @@ int xy2region(int x, int y, int region_size, int nregions_x, int nregions_y)
     return (int)(x_coord / region_size) * nregions_y + (int)(y_coord / region_size);
 }
 
-
-#ifdef TEST
-int main(int argc, char *argv[]) 
-{
-	RegionTable *rt;
-	int iread, i;
-
-	for (iread=0; iread<N_READS; iread++)
-                initRTS(2,3,iread,5);
-
-	rt = getRTS(0,0,0,0); i = getIndex(0,0,0,0);
-	printf("getRTS(0,0,0,0) = %d (%p)\n", i, rt);
-	rt = getRTS(0,0,0,1);
-	printf("getRTS(0,0,0,1) = %d (%p)\n", i, rt);
-	rt = getRTS(0,0,0,2);
-	printf("getRTS(0,0,0,2) = %d (%p)\n", i, rt);
-	rt = getRTS(0,0,0,3);
-	printf("getRTS(0,0,0,3) = %d (%p)\n", i, rt);
-	rt = getRTS(0,0,0,4);
-	printf("getRTS(0,0,0,4) = %d (%p)\n", i, rt);
-	rt = getRTS(0,0,1,0);
-	printf("getRTS(0,0,1,0) = %d (%p)\n", i, rt);
-	rt = getRTS(0,0,1,1);
-	printf("getRTS(0,0,1,1) = %d (%p)\n", i, rt);
-	rt = getRTS(1,2,3,4);
-	printf("getRTS(1,2,3,4) = %d (%p)\n", i, rt);
-}
-#endif
-
