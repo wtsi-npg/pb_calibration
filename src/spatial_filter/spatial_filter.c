@@ -426,13 +426,9 @@ int dump_bam_file(Settings *s, samfile_t *fp_bam, size_t *nreads)
 			/* break on end of BAM file */
 			break;
 		}
+
 		if (BAM_FUNMAP & bam->core.flag) continue;
-		if (BAM_FQCFAIL & bam->core.flag) continue;
-		if (BAM_FPAIRED & bam->core.flag) {
-			if (0 == (BAM_FPROPER_PAIR & bam->core.flag)) {
-				continue;
-			}
-		}
+
 		parse_bam_alignments(fp_bam, bam, bam_read_seq, bam_read_qual, NULL, bam_read_mismatch,
                                                   bam_read_buff_size, s->snp_hash);
 
@@ -652,6 +648,7 @@ void makeRegionTable(Settings *s, samfile_t *fp_bam, int *ntiles, size_t * nread
 			s->read_length[bam_read] = read_length;
    	                initRTS(N_TILES, s->nregions, bam_read, read_length);
 		}
+
 		if (s->read_length[bam_read] != read_length) {
 			die("Error: inconsistent read lengths within bam file for read %d.\nHave length %ld, previously it was %d.\n",
 			    bam_read, (long)read_length,
@@ -722,12 +719,10 @@ int filter_bam(Settings * s, samfile_t * fp_in_bam, samfile_t * fp_out_bam,
 		}
 
 		read_length = bam->core.l_qseq;
-		if (0 == read_length)
-			continue;
-
 		if (0 == s->read_length[bam_read]) {
 			s->read_length[bam_read] = read_length;
 		}
+
 		if (s->read_length[bam_read] != read_length) {
 			die("Error: inconsistent read lengths within bam file for read %d.\n"
 			    "have length %ld, previously it was %d.\n",
@@ -956,6 +951,7 @@ void applyFilter(Settings *s)
 	size_t nfiltered = 0;
 	Header hdr;
 	FILE *fp;
+        int read;
 
 	fp = fopen(s->filter, "rb");
 	if (!fp) die("Can't open filter file %s\n", s->filter);
@@ -966,6 +962,9 @@ void applyFilter(Settings *s)
 	s->region_size = hdr.region_size;
 	s->nregions_x = hdr.nregions_x;
 	s->nregions_y = hdr.nregions_y;
+
+        for (read=0;read<hdr.nreads;read++)
+                s->read_length[read] = hdr.readLength[read];
 
 	if (0 == s->compress)
 		strcat(out_mode, "u");
@@ -1154,12 +1153,35 @@ int main(int argc, char **argv)
 
         if (!settings.filter && (dumpFilter || settings.apply)) die("Error: no filter file specified\n");
 
-	if (settings.calculate && (!override_intensity_dir && (!settings.width || !settings.height)))
-                die("ERROR: you must specify an intensity dir or Width and Height\n");
+	if (settings.calculate) {
+            if (settings.width < 0) die("Error: invalid tile width");
+	    if (settings.height < 0) die("Error: invalid tile height");
 
-        if (!settings.width < 0) die("Error: invalid tile width");
-	if (!settings.height < 0) die("Error: invalid tile height");
-	if (!settings.region_size < 0) die("Error: invalid region size");
+            if (!override_intensity_dir && (!settings.width || !settings.height))
+                die("ERROR: you must specify an intensity dir or tile width and height\n");
+
+   	    if (settings.region_size < 1) die("Error: invalid region size");
+
+	    if (settings.region_min_count < 1) die("Error: invalid region_min_count");
+
+#if 0 // this code will reset region_min_count so that at least 2 reads are required to pass any threshold
+            int region_min_count = settings.region_min_count;
+
+	    if ((region_min_count * settings.region_mismatch_threshold) < 1.0 ) {
+                region_min_count = ceil(1.0 / settings.region_mismatch_threshold);
+                display("Resetting region_min_count to %d\n", region_min_count);
+            }
+	    if ((region_min_count * settings.region_insertion_threshold) < 1.0 ) {
+                region_min_count = ceil(1.0 / settings.region_insertion_threshold);
+                display("Resetting region_min_count to %d\n", region_min_count);
+            }
+	    if ((region_min_count * settings.region_deletion_threshold) < 1.0 ) {
+                region_min_count = ceil(1.0 / settings.region_deletion_threshold);
+                display("Resetting region_min_count to %d\n", region_min_count);
+            }
+            settings.region_min_count = region_min_count;
+#endif            
+        }
 
 	// create pseudo command line
 	if (settings.calculate) {
@@ -1192,10 +1214,10 @@ int main(int argc, char **argv)
 		cmd = smalloc(2048);
 		strcat(cmd, argv[0]);
 		strcat(cmd, " -a ");
-		if (settings.qcfail)   { strcat(cmd, " -f "); }
+		if (settings.qcfail)    { strcat(cmd, " -f "); }
 		if (!settings.compress) { strcat(cmd, " -u "); }
-		if (settings.output)   { strcat(cmd, " -o "); strcat(cmd, settings.output); }
-		if (settings.filter)   { strcat(cmd, " -F "); strcat(cmd, settings.filter); }
+		if (settings.output)    { strcat(cmd, " -o "); strcat(cmd, settings.output); }
+		if (settings.filter)    { strcat(cmd, " -F "); strcat(cmd, settings.filter); }
 		strcat(cmd, " ");
 		if (settings.in_bam_file) strcat(cmd, settings.in_bam_file);
 		if (strlen(cmd) > 2047) die("Command line too big");

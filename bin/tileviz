@@ -33,6 +33,7 @@ Readonly::Scalar my $OQUALITIES_INDEX     => 5;
 
 Readonly::Scalar my $FORWARD_READ     => 0x0040;
 Readonly::Scalar my $REVERSE_READ     => 0x0080;
+Readonly::Scalar my $QC_FAIL          => 0x0200;
 
 Readonly::Scalar my $COORD_SHIFT      => 1000;
 Readonly::Scalar my $COORD_FACTOR     => 10;
@@ -394,6 +395,7 @@ sub _parse {
   my $read_index = $READ_INDEX;
   my $bam_flag_index = $BAM_FLAG_INDEX;
   my $rr = $REVERSE_READ;
+  my $qcf = $QC_FAIL;
   my $read_name_pattern = qr/:(\d+):(\d+):(\d+)(#\S+)?\z/;
   my $count  = 0;
   my $jcount = 0;
@@ -437,8 +439,9 @@ sub _parse {
     $y = $self->$coord_method($y, $read_name);
     my $flag = $columns[$bam_flag_index];
     my $read = ($flag & $rr) ? 'R' : 'F';
+    my $qc_fail = ($flag & $qcf) ? 1 : 0;
 
-    $self->_bin_read($tile, $x, $y, $read, \@columns);
+    $self->_bin_read($tile, $x, $y, $read, $qc_fail, \@columns);
     $count++;
   }
 
@@ -489,10 +492,11 @@ sub _coord_old {
 }
 
 sub _bin_read { ##no critic (Subroutines::ProhibitManyArgs)
-  my ($self, $tile, $x, $y, $read, $columns) = @_;
+  my ($self, $tile, $x, $y, $read, $qc_fail, $columns) = @_;
 
   my $num_cycles   = $self->_num_cycles;
-  $self->_tiles->{$tile}->{$read}->[$x]->[$y]->[0]++;
+  $self->_tiles->{$tile}->{$read}->[$x]->[$y]->[0]->[0]++;
+  $self->_tiles->{$tile}->{$read}->[$x]->[$y]->[0]->[1] += ($qc_fail ? 1 : 0);
   my $data = $self->_compute($columns);
   my $i = 0;
   while( $i < $num_cycles) {
@@ -660,12 +664,17 @@ sub _directions {
 sub _colour_coverage {
   my ($self, $direction, $r) = @_;
   my $colour;
-  my $v = $r->[0];
+  my $v = $r->[0]->[0];
+  my $f = $r->[0]->[1];
   if ($v) {
-    ##no critic (ValuesAndExpressions::ProhibitMagicNumbers)
-    if ($v > 11) {$v = 11;}
-    ##use critic
-    $colour = $self->_colour_table->{$v};
+    if ($f > 0.5*$v) {
+      $colour = $self->_colour_table->{"qc_fail"};
+    }else{
+      ##no critic (ValuesAndExpressions::ProhibitMagicNumbers)
+      if ($v > 11) {$v = 11;}
+      ##use critic
+      $colour = $self->_colour_table->{$v};
+    }
   }
   return $colour;
 }
@@ -696,7 +705,7 @@ sub _colour_qual {
 
   $type ||= 'qual';
   my $type_index ||= $self->_type_index($type);
-  my $total = $r->[0];
+  my $total = $r->[0]->[0];
   my $colour;
   if ($total) {
     my $v;
@@ -732,7 +741,7 @@ sub _colour_mmatch {
     $type_index = $self->_type_index('mmatch')
   }
 
-  my $total = $r->[0];
+  my $total = $r->[0]->[0];
 
   my $colour;
   if ($total) {
@@ -776,6 +785,7 @@ sub _image_init {
   ##no critic (ProhibitMagicNumbers)
   $colour_table->{'text'} = $im->colorAllocate(239, 239, 239); # light grey
   $colour_table->{'no_mmatch'} = $im->colorAllocate(255, 255, 255); # white
+  $colour_table->{'qc_fail'} = $im->colorAllocate(255, 0, 0); # red
   $colour_table->{'zero'} = $im->colorAllocate(255, 0, 0); # red
   $colour_table->{'medium'} = $im->colorAllocate(21, 58, 144); # dark blue
   $colour_table->{'low'} = $im->colorAllocate(244, 211, 71); # yellow
