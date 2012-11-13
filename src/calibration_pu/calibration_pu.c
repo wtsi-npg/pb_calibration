@@ -981,8 +981,6 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
                                      bam_read_mismatch, bam_read_buff_size,s->snp_hash);
 
         read_length = strlen(bam_read_seq);
-        if (0 == read_length) continue;
-
         if (0 == s->read_length[bam_read]) {
             s->read_length[bam_read] = read_length;
 

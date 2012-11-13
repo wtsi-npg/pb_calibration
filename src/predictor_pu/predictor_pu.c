@@ -579,11 +579,10 @@ int recalibrate_bam(Settings *s, HashTable *ct_hash, samfile_t *fp_in_bam, samfi
         }
 
         read_length = bam->core.l_qseq;
-        if (0 == read_length) continue;
-
         if (0 == s->read_length[bam_read]) {
             s->read_length[bam_read] = read_length;
         }
+
         if (s->read_length[bam_read] != read_length) {
             fprintf(stderr,
                     "Error: inconsistent read lengths "
