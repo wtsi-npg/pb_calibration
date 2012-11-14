@@ -57,6 +57,9 @@
 #include "pb_config.h"
 #endif
 
+#ifdef HAVE_PREAD
+# define _XOPEN_SOURCE 500 // for pread
+#endif
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
@@ -88,16 +91,16 @@
 #include <aprintf.h>
 #include <die.h>
 #include <rts.h>
+#include <shared.h>
+#include <parse_bam.h>
+#include <cif.h>
 
 #include <version.h>
-
-#define MAX_CIF_CHUNK_BYTES 4194304
 
 /* if we split data by state, using a filter file rather than tile, use tile as a place holder for state */
 #define N_STATES 2
 
 #define PHRED_QUAL_OFFSET 33  // phred quality values offset
-#define ILL_QUAL_OFFSET   64  // illumina quality values offset
 
 typedef struct {
     int         tile;
@@ -117,13 +120,6 @@ typedef struct {
 } CalTable;
 
 typedef struct {
-    long        lane;
-    long        cycle;
-    long        read;
-    const char *dir;
-} CifDir;
-
-typedef struct {
     char *cmdline;
     char *intensity_dir;
     char *output;
@@ -135,47 +131,7 @@ typedef struct {
     int nregions_x;
     int nregions_y;
     char *working_dir;
-    CifDir *cif_dirs;
-    size_t  n_cif_dirs;
-    size_t *cif_lane_index;
-    size_t  n_cif_lanes;
 } Settings;
-
-typedef union {
-    int8_t  *i8;
-    int16_t *i16;
-    int32_t *i32;
-} ChanData;
-
-typedef struct {
-    char *filename;
-    int fd;
-    int data_type;
-    int num_channels;
-    int cycle_number;
-    off_t  cycle_start_pos;
-    size_t num_entries;
-    size_t chunk_num_entries;
-    size_t chunk_start;
-    ChanData *chan_data;
-} CifCycleData;
-
-typedef struct {
-    CifCycleData *cycles;
-    size_t        ncycles;
-    size_t        size;
-    size_t        num_spots;
-} CifData;
-
-
-static
-void
-checked_chdir(const char* dir){
-    if(chdir(dir)){
-        fprintf(stderr,"ERROR: failed to change directory to: %s\n",dir);
-        exit(EXIT_FAILURE);
-    }
-}
 
 static void initialiseCalTable(CalTable *ct, int tile, int read, int cycle)
 {
@@ -373,229 +329,6 @@ int Get_bin_purity(CalTable *ct, int value)
     return ibin;
 }
 
-/**
- * Reverses the direction of the array of ints
- *
- * @param int is the input array. <b>NB.</b> this is destructively modified.
- *
- * @returns a pointer to the original storage but with the contents
- * modified
- */
-int *
-reverse_int(int *num, int n)
-{
-    int *t = num, *s = num + n - 1;
-    int c;
-
-    while (t < s) {
-        c = *s;
-        *s = *t;
-        *t = c;
-        t++;
-        s--;
-    }
-
-    return num;
-}
-
-
-// lifted from /nfs/users/nfs_j/jkb/work/tracetools/sequtil/seq_ops.c
-
-/**
- * Reverses the direction of the string.
- *
- * @param seq is the input sequence. <b>NB.</b> this is destructively modified.
- *
- * @returns a pointer to the original string storage but with the contents
- * modified
- */
-char *
-reverse_seq(char *seq)
-{
-    char *t = seq, *s = seq + strlen(seq) - 1;
-    char c;
-
-    while (t < s) {
-        c = *s;
-        *s = *t;
-        *t = c;
-        t++;
-        s--;
-    }
-
-    return seq;
-}
-
-/* cts -simplification of parse_4_int code for single int parse
- */
-inline static
-const char *
-parse_next_int(const char *str, int *val, const char *sep) {
-    const static char spaces[256] = {
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-    };
-
-    const char* const start = str;
-    int minus = 0;
-    int ival = 0;
-    char c;
-
-    if (NULL == sep) {
-        while (*str && spaces[(unsigned) *str]) ++str;
-    } else {
-        while (*str && NULL != strchr(sep, *str)) ++str;
-    }
-
-    c = *str;
-
-    if (!c) {
-      /*
-        fprintf(stderr, "Error: expected to parse int from string \"%s\"\n", start);
-        exit(EXIT_FAILURE);
-	*/
-      return NULL;
-    }
-
-    if (c == '-' || c == '+') {
-        minus = (c == '-');
-        c = *++str;
-    }
-    
-    while (c >= '0' && c <= '9') {
-        ival = ival * 10 + (c-'0');
-        c = *++str;
-    }
-
-    if (NULL == sep) {
-        switch(c) {
-        case '\n': case '\r': case '\t': case ' ': case '\0':
-            if (minus) ival = -ival;
-            *val = ival;
-            return str;
-        }
-    } else {
-        if (NULL != strchr(sep, *str)) {
-            if (minus) ival = -ival;
-            *val = ival;
-            return str;
-        }
-    }
-    fprintf(stderr, "Error: expected to parse int from string \"%s\"\n", start);
-    exit(EXIT_FAILURE);
-}
-
-
-/*
- * cts - parse bam file line
- *
- * returns 0 on success, 1 on expected failure.
- */
-static
-int
-parse_bam_file_line(Settings *s,
-                    samfile_t *fp,
-                    bam1_t *bam,
-                    int *bam_lane,
-                    int *bam_tile,
-                    int *bam_x,
-                    int *bam_y,
-                    size_t *bam_offset,
-                    int *bam_read) {
-
-    char *name;
-    uint8_t *ci_ptr;
-    const char *sep = ":#/";
-    const char *cp;
-    int lane, tile, x, y, offset, read;
-
-    if( 0 > samread(fp, bam)) return 1;
-    
-    lane = -1;
-    tile = -1;
-    x = -1;
-    y = -1;
-    offset = -1;
-
-    name = bam1_qname(bam);
-    cp = strchr(name,':');
-    if(NULL == cp){
-        fprintf(stderr,"ERROR: Invalid run in name: \"%s\"\n",name);
-        exit(EXIT_FAILURE);
-    }
-    cp++;
-    cp = parse_next_int(cp,&lane,sep);
-    cp = parse_next_int(cp,&tile,sep);
-    cp = parse_next_int(cp,&x,sep);
-    cp = parse_next_int(cp,&y,sep);
-
-    /* look for ci tag */
-    ci_ptr = bam_aux_get(bam, "ci");
-    if (NULL == ci_ptr){
-        /* no ci tag get offset from name */
-        cp = parse_next_int(cp,&offset,sep);
-        if(NULL == cp){
-            fprintf(stderr,"ERROR: No ci tag and no offset in name: \"%s\"\n",name);
-            exit(EXIT_FAILURE);
-        }
-    }else{
-        offset = bam_aux2i(ci_ptr);
-        /* name offset is 0 based but ci is 1 based */
-        offset--;
-    }
-       
-    if(lane > N_LANES+1 || lane < 1){
-        fprintf(stderr,"ERROR: Invalid lane value in name: \"%s\"\n",name);
-        exit(EXIT_FAILURE);
-    }
-
-    if(tile <= 0){
-        fprintf(stderr,"ERROR: Invalid tile value in name: \"%s\"\n",name);
-        exit(EXIT_FAILURE);
-    }
-
-    if(offset < 0){
-        fprintf(stderr,"ERROR: Invalid offset value in name: \"%s\"\n",name);
-        exit(EXIT_FAILURE);
-    }
-
-    read = 0;
-    if(BAM_FPAIRED & bam->core.flag){
-        if(BAM_FREAD1 & bam->core.flag)
-            read = 1;
-        if(BAM_FREAD2 & bam->core.flag)
-            read = 2;
-        if(read == 0){
-            fprintf(stderr,"ERROR: Unable to determine read from flag %d for read: \"%s\"\n",bam->core.flag,name);
-            exit(EXIT_FAILURE);
-        }
-    }
-
-    *bam_lane = lane;
-    *bam_tile = tile;
-    *bam_x = x;
-    *bam_y = y;
-    *bam_offset = offset;
-    *bam_read = read;
-
-    return 0;
-}
-
-
 /* copied from sam.c */
 
 static bam_header_t *bam_header_dup(const bam_header_t *h0)
@@ -692,359 +425,6 @@ static void bam_header_add_pg(Settings *s, bam_header_t *bam_header) {
     free(pg);
 }
 
-int cif_dir_compare(const void *va, const void *vb) {
-    const CifDir *a = (const CifDir *) va;
-    const CifDir *b = (const CifDir *) vb;
-    
-    if (a->lane  < b->lane)  return -1;
-    if (a->lane  > b->lane)  return  1;
-    if (a->read  < b->read)  return -1;
-    if (a->read  > b->read)  return  1;
-    if (a->cycle < b->cycle) return -1;
-    if (a->cycle > b->cycle) return  1;
-    return strcmp(a->dir, b->dir);
-}
-
-static int get_cif_dirs(Settings *s) {
-    char   *pattern = NULL;
-    size_t  pattern_sz = 0;
-    glob_t  glob_buf;
-    CifDir *cif_dirs;
-    size_t *lane_index;
-    regex_t    re;
-    regmatch_t matches[4];
-    size_t  ndirs;
-    size_t  i, l;
-    long    max_lane = 0;
-    int     res;
-
-    pattern_sz = strlen(s->intensity_dir) + 30;
-    pattern    = smalloc(pattern_sz);
-
-    snprintf(pattern, pattern_sz,
-             "%s/L*/C*", s->intensity_dir);
-
-    memset(&glob_buf, 0, sizeof(glob_buf));
-    memset(&re,       0, sizeof(re));
-
-    res = glob(pattern,
-               GLOB_ERR|GLOB_NOSORT|GLOB_NOESCAPE, NULL, &glob_buf);
-    if (0 != res) {
-        if (GLOB_NOMATCH != res) {
-            perror("Looking for CIF directories");
-        }
-        globfree(&glob_buf);
-        free(pattern);
-        return -1;
-    }
-    
-    cif_dirs = smalloc(glob_buf.gl_pathc * sizeof(CifDir));
-
-    res = regcomp(&re, "/L([[:digit:]]+)/C([[:digit:]]+)\\.([[:digit:]]+)/*$",
-                  REG_EXTENDED);
-    if (0 != res) goto regerr;
-    
-    for (ndirs = 0, i = 0; i < glob_buf.gl_pathc; i++) {
-        const char *p = glob_buf.gl_pathv[i];
-
-        res = regexec(&re, p, sizeof(matches)/sizeof(matches[0]), matches, 0);
-        if (REG_NOMATCH == res) continue;
-        if (0 != res) goto regerr;
-        
-        cif_dirs[ndirs].lane  = strtol(p + matches[1].rm_so, NULL, 10);
-        cif_dirs[ndirs].cycle = strtol(p + matches[2].rm_so, NULL, 10);
-        cif_dirs[ndirs].read  = strtol(p + matches[3].rm_so, NULL, 10);
-        cif_dirs[ndirs].dir   = strdup(p);
-        if (NULL == cif_dirs[ndirs].dir) goto nomem;
-        if (cif_dirs[ndirs].lane > max_lane) max_lane = cif_dirs[ndirs].lane;
-        ndirs++;
-    }
-    regfree(&re);
-    globfree(&glob_buf);
-
-    if (0 == ndirs) {
-        free(cif_dirs);
-        return -1;
-    }
-
-    qsort(cif_dirs, ndirs, sizeof(*cif_dirs), cif_dir_compare);
-
-    lane_index = scalloc(max_lane + 2, sizeof(*lane_index));
-
-    for (i = 0, l = 0; i < ndirs; i++) {
-        if (cif_dirs[i].lane > l) {
-            long j;
-
-            for (j = l + 1; j <= cif_dirs[i].lane; j++) {
-                lane_index[j] = i;
-            }
-            l = cif_dirs[i].lane;
-        }
-    }
-    lane_index[l + 1] = ndirs;
-
-    s->cif_dirs       = cif_dirs;
-    s->n_cif_dirs     = ndirs;
-    s->cif_lane_index = lane_index;
-    s->n_cif_lanes    = max_lane;
-
-    return 0;
-
- nomem:
-    perror("get_cif_dirs");
-    exit(EXIT_FAILURE);
-
- regerr:
-    {
-        char msg[1024];
-        regerror(res, &re, msg, sizeof(msg));
-        fprintf(stderr,
-                "Regular expression search failed in get_cif_dirs: %s\n",
-                msg);
-        exit(EXIT_FAILURE);
-    }
-}
-
-/* Read count bytes at position offset in file fd.  It actually emulates
-   pread(2) as the real thing doesn't seem to be any faster, and it
-   may not be present. */
-static ssize_t pread_bytes(int fd, void *buf, size_t count, off_t offset) {
-    char *b = (char *) buf;
-    ssize_t res;
-    ssize_t total = 0;
-    
-    if (lseek(fd, offset, SEEK_SET) < 0) return -1;
-
-    do {
-        do {
-            res = read(fd, b + total, count - total);
-        } while (res < 0 && EINTR == errno);
-        if (res > 0) total += res;
-    } while (res > 0 && total < count);
-    return res < 0 ? res : total;
-}
-
-static void read_cif_chunk(Settings *s, CifCycleData *cycle, size_t spot_num) {
-    size_t num_entries;
-    size_t num_bytes;
-    size_t chan_size_bytes;
-    ssize_t got;
-    off_t  file_pos;
-    int chan;
-    
-    assert(spot_num < cycle->num_entries);
-    if (spot_num >= cycle->chunk_start
-        && spot_num < cycle->chunk_start + cycle->chunk_num_entries) {
-        return;
-    }
-
-    chan_size_bytes  = cycle->num_entries * cycle->data_type;
-    num_entries  = (cycle->num_entries - spot_num < cycle->chunk_num_entries
-                    ? cycle->num_entries - spot_num
-                    : cycle->chunk_num_entries);
-    num_bytes = num_entries * cycle->data_type;
-
-    if (NULL == cycle->chan_data) {
-        size_t chunk_size_bytes = cycle->chunk_num_entries * cycle->data_type;
-        cycle->chan_data = smalloc(cycle->num_channels * sizeof(cycle->chan_data[0]));
-        for (chan = 0; chan < cycle->num_channels; chan++) {
-            cycle->chan_data[chan].i8 = smalloc(chunk_size_bytes);
-        }
-    }
-
-    for (chan = 0; chan < cycle->num_channels; chan++) {
-        file_pos = (cycle->cycle_start_pos
-                    + chan_size_bytes * chan
-                    + spot_num * cycle->data_type);
-        got = pread_bytes(cycle->fd, cycle->chan_data[chan].i8, num_bytes, file_pos);
-        if (got < 0) {
-            die("Error reading %s: %s\n", cycle->filename, strerror(errno));
-        }
-        if (got < num_bytes) {
-            die("Error: Did not get the expected amount of data from %s\n",
-                cycle->filename);
-        }
-    }
-    cycle->chunk_start = spot_num;
-
-#ifdef WORDS_BIGENDIAN
-    /* CIF files are little-endian, so we need to switch everything
-       around on big-endian machines */
-    switch (cycle->data_type) {
-    case 1:
-        break;
-    case 2:
-        for (chan = 0; chan < cycle->num_channels; chan++) {
-            size_t i;
-            int16_t *d = cycle->chan_data[chan].i16;
-            for (i = 0; i < num_entries; i++) {
-                d[i] = bswap_16(d[i]);
-            }
-        }
-        break;
-    case 4:
-        for (chan = 0; chan < cycle->num_channels; chan++) {
-            size_t i;
-            int32_t *d = cycle->chan_data[chan].i32;
-            for (i = 0; i < num_entries; i++) {
-                d[i] = bswap_32(d[i]);
-            }
-        }
-        break;
-    default:
-        die("Unexpected data type in CIF file %s\n", cycle->filename);
-    }
-#endif
-}
-
-static int read_cif_file(char *name, int fd, CifData *cif_data) {
-    uint8_t cif_header[13];
-    int    num_cycles;
-    int    first_cycle;
-    int    num_channels = 4;
-    size_t num_entries;
-    size_t chunk_num_entries;
-    size_t cycle_size_bytes;
-    off_t  cycle_start_pos = sizeof(cif_header);
-    int    data_type;
-    CifCycleData *cycle;
-    size_t i;
-    
-    if (sizeof(cif_header)
-        != pread_bytes(fd, cif_header, sizeof(cif_header), 0)) return -1;
-    if (0 != memcmp(cif_header, "CIF", 3))                 return -1;
-    if (cif_header[3] != '\1')                             return -1;
-
-    data_type   = cif_header[4];
-    first_cycle = cif_header[5] | (cif_header[6] << 8);
-    num_cycles  = cif_header[7] | (cif_header[8] << 8);
-    num_entries = (cif_header[9]
-                   | (cif_header[10] << 8)
-                   | (cif_header[11] << 16)
-                   | (cif_header[12] << 24));
-
-    if (0 == cif_data->num_spots) {
-        cif_data->num_spots = num_entries;
-    } else if (cif_data->num_spots != num_entries) {
-        fprintf(stderr, "Got unexpected number of entries in CIF file %s\n"
-                "Expected: %zd; Got %zd\n",
-                name, cif_data->num_spots, num_entries);
-    }
-    if (data_type < 1 || data_type > 4) {
-        die("Unexpected data_type in CIF file %s\n", name);
-    }
-
-    chunk_num_entries = MAX_CIF_CHUNK_BYTES / (data_type * num_channels);
-    if (chunk_num_entries > num_entries) chunk_num_entries = num_entries;
-    cycle_size_bytes = num_entries * data_type * num_channels;
-
-    for (i = 0; i < num_cycles; i++) {
-        if (cif_data->ncycles == cif_data->size) {
-            cif_data->size = cif_data->size > 0 ? cif_data->size * 2 : 128;
-            cif_data->cycles = srealloc(cif_data->cycles,
-                                        cif_data->size * sizeof(CifCycleData));
-        }
-        
-        cycle = cif_data->cycles + cif_data->ncycles;
-        
-        cycle->filename     = sstrdup(name);
-        cycle->fd           = fd;
-        cycle->data_type    = data_type;
-        cycle->num_channels = num_channels;
-        cycle->cycle_number = i + first_cycle;
-        cycle->cycle_start_pos = cycle_start_pos + i * cycle_size_bytes;
-        cycle->num_entries  = num_entries;
-        cycle->chunk_num_entries = chunk_num_entries;
-        cycle->chunk_start  = num_entries; /* Will force first load */
-        cycle->chan_data    = NULL; /* Allocate memory on first load */
-
-        cif_data->ncycles++;
-    }
-
-    return 0;
-}
-
-static CifData *load_cif_data(Settings *s, int lane, int tile, char *suffix) {
-    char *cif_file = NULL;
-    size_t cif_file_sz = strlen(s->intensity_dir) + strlen(suffix) + 100;
-    size_t first_dir;
-    size_t end_dir;
-    size_t i;
-    int cif = -1;
-    CifData *cif_data = NULL;
-    
-    cif_file = smalloc(cif_file_sz);
-
-    cif_data = scalloc(1, sizeof(CifData));
-
-    first_dir = (lane <= s->n_cif_lanes
-                 ? s->cif_lane_index[lane]
-                 : s->cif_lane_index[s->n_cif_lanes + 1]);
-    end_dir = (lane <= s->n_cif_lanes
-               ? s->cif_lane_index[lane + 1]
-               : s->cif_lane_index[s->n_cif_lanes + 1]);
-
-    for (i = first_dir; i < end_dir; i++) {
-        snprintf(cif_file, cif_file_sz,
-                 "%s/s_%d_%d.%s", s->cif_dirs[i].dir, lane, tile, suffix);
-        cif = open(cif_file, O_RDONLY);
-        if (cif < 0) {
-            if (ENOENT == errno) continue;
-            die("Couldn't open %s : %s\n", cif_file, strerror(errno));
-        }
-
-        if (0 != read_cif_file(cif_file, cif, cif_data)) {
-            die("Error reading %s\n", cif_file);
-        }
-    }
-
-    free(cif_file);
-
-    /* Check we have a full set of cycles */
-    for (i = 0; i < cif_data->ncycles; i++) {
-        if (cif_data->cycles[i].cycle_number > i + 1) {
-            die("Error: Missing cycle %zd for lane %d tile %d"
-                " from CIF files.\n", i + 1, lane, tile);
-        } else if (cif_data->cycles[i].cycle_number != i + 1) {
-            die("Error: Unexpected cycle number %d for lane %d tile %d"
-                " from CIF files.\n", cif_data->cycles[i].cycle_number,
-                lane, tile);
-        }
-    }
-
-    return cif_data;
-}
-
-static void free_cif_data(CifData *cif_data) {
-    size_t i;
-    int c;
-
-    if (NULL != cif_data->cycles) {
-        for (i = 0; i < cif_data->ncycles; i++) {
-            if (NULL != cif_data->cycles[i].chan_data) {
-                for (c = 0; c < cif_data->cycles[i].num_channels; c++) {
-                    if (NULL != cif_data->cycles[i].chan_data[c].i8)
-                        free(cif_data->cycles[i].chan_data[c].i8);
-                }
-                free(cif_data->cycles[i].chan_data);
-            }
-            if (0 < cif_data->cycles[i].fd) {
-                if (0 != close(cif_data->cycles[i].fd)) {
-                    if (NULL != cif_data->cycles[i].filename)
-                        die("Error when closing %s: %s\n", cif_data->cycles[i].filename, strerror(errno));
-                    else
-                        die("Error when closing cif file: %s\n", strerror(errno));
-                }
-            }
-            if (NULL != cif_data->cycles[i].filename)
-                free(cif_data->cycles[i].filename);
-        }
-        free(cif_data->cycles);
-    }
-    
-    free(cif_data);
-}
-
 /*
   Calculate purity, update quality value and write bam file
 
@@ -1110,7 +490,7 @@ static int update_bam_qualities(Settings *s, HashTable *ct_hash, CifData *cif_da
         }
         ct = (CalTable *)hi->data.p;
 
-        read_cif_chunk(s, cycle, spot_num);
+        read_cif_chunk(cycle, spot_num);
         for (channel = 0; channel < cycle->num_channels; channel++) {
             size_t base_pos = spot_num - cycle->chunk_start;
             switch (cycle->data_type) {
@@ -1194,17 +574,15 @@ int recalibrate_bam(Settings *s, HashTable *ct_hash, samfile_t *fp_in_bam, samfi
         int bam_lane = -1, bam_tile = -1, bam_x = -1, bam_y = -1, bam_read = -1, read_length;
         size_t bam_offset = 0;
 
-        if (0 != parse_bam_file_line(s, fp_in_bam, bam,
-                                     &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_offset, &bam_read)) {
-            break;
+        if (parse_bam_readinfo(fp_in_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, &bam_offset)) {
+            break;	/* break on end of BAM file */
         }
 
         read_length = bam->core.l_qseq;
-        if (0 == read_length) continue;
-
         if (0 == s->read_length[bam_read]) {
             s->read_length[bam_read] = read_length;
         }
+
         if (s->read_length[bam_read] != read_length) {
             fprintf(stderr,
                     "Error: inconsistent read lengths "
@@ -1230,7 +608,7 @@ int recalibrate_bam(Settings *s, HashTable *ct_hash, samfile_t *fp_in_bam, samfi
 
             /* Look for processed trace data */
             if (NULL != cif_data) free_cif_data(cif_data);
-            cif_data = load_cif_data(s, lane, tile, "dif");
+            cif_data = load_cif_data(lane, tile, "dif");
 
             /* Check that we actually got some trace data */
             if (NULL == cif_data) {
@@ -1435,10 +813,6 @@ int main(int argc, char **argv) {
     settings.read_length[1] = 0;
     settings.read_length[2] = 0;
     settings.working_dir = NULL;
-    settings.cif_dirs       = NULL;
-    settings.n_cif_dirs     = 0;
-    settings.cif_lane_index = NULL;
-    settings.n_cif_lanes    = 0;
 
     settings.cmdline = get_command_line(argc, argv);
 
@@ -1562,7 +936,7 @@ int main(int argc, char **argv) {
     nct = restoreCalTable(&settings, ct_filename, ct_hash);
 
     /* Look for CIF directories */
-    get_cif_dirs(&settings);
+    get_cif_dirs(settings.intensity_dir);
 
     /* open the input bam file */
     fp_input_bam = samopen(in_bam_file, "rb", 0);
@@ -1608,8 +982,6 @@ int main(int argc, char **argv) {
 	while ((hashItem = HashTableIterNext(ct_hash, tileIter)))
             freeCalTable((CalTable *)hashItem->data.p);
     }
-
-    if (NULL != settings.cif_dirs) free(settings.cif_dirs);
 
     if (NULL != settings.working_dir) free(settings.working_dir);
 
