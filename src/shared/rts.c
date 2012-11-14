@@ -131,9 +131,11 @@ void readFilterData(FILE *fp, Header *hdr)
 {
 	int i, n=0;
 	for (i=0; i < hdr->nreads; i++) n += hdr->readLength[i];
-	filterData = smalloc(hdr->ntiles * n * hdr->nregions);
-	if (fread(filterData, hdr->ntiles * n * hdr->nregions, 1, fp) != 1) 
-		die("Error reading filter file\n");
+	if ((hdr->ntiles * n * hdr->nregions)) {
+            filterData = smalloc(hdr->ntiles * n * hdr->nregions);
+            if (fread(filterData, hdr->ntiles * n * hdr->nregions, 1, fp) != 1) 
+                    die("Error reading filter file\n");
+        }
 
 	_hdr = hdr;
 }
