@@ -797,7 +797,7 @@ static void usage(int code)
 {
 	FILE *usagefp = stderr;
 
-	fprintf(usagefp, "spatial_filter v%s\n\n", version);
+	fprintf(usagefp, "spatial_filter %s\n\n", version);
 	fprintf(usagefp,
 		"Usage: spatial_filter [command] [options] bam_file\n"
 		"" "  calculate or apply a spatial filter\n" "");
