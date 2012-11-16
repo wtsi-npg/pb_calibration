@@ -703,7 +703,7 @@ static
 void usage(int code) {
     FILE* usagefp = stderr;
 
-    fprintf(usagefp, "pb_predictor v%s\n\n", version);
+    fprintf(usagefp, "pb_predictor %s\n\n", version);
     fprintf(usagefp, 
             "Usage: pb_predictor [options] bam file\n"
             ""
