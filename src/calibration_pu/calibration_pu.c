@@ -1157,7 +1157,7 @@ static
 void usage(int code) {
     FILE* usagefp = stderr;
 
-    fprintf(usagefp, "pb_calibration v%s\n\n", version);
+    fprintf(usagefp, "pb_calibration %s\n\n", version);
     fprintf(usagefp, 
             "Usage: pb_calibration [options] bam_file\n"
             ""

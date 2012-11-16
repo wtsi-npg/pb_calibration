@@ -333,7 +333,6 @@ CifData *load_cif_data(int lane, int tile, char *suffix)
     int cif = -1;
     CifData *cif_data = NULL;
 
-	n_cif_lanes = 0;
     cif_data = scalloc(1, sizeof(CifData));
 
     first_dir = (lane <= n_cif_lanes
@@ -344,7 +343,7 @@ CifData *load_cif_data(int lane, int tile, char *suffix)
                : cif_lane_index[n_cif_lanes + 1]);
 
     for (i = first_dir; i < end_dir; i++) {
-		size_t cif_file_sz = cif_file_sz = strlen(cif_dirs[i].dir) + strlen(suffix) + 100;
+		size_t cif_file_sz = strlen(cif_dirs[i].dir) + strlen(suffix) + 100;
 		char *cif_file = smalloc(cif_file_sz);
         snprintf(cif_file, cif_file_sz, "%s/s_%d_%d.%s", cif_dirs[i].dir, lane, tile, suffix);
         cif = open(cif_file, O_RDONLY);
@@ -357,7 +356,6 @@ CifData *load_cif_data(int lane, int tile, char *suffix)
             die("Error reading %s\n", cif_file);
         }
 		free(cif_file);
-		close(cif);
     }
 
     /* Check we have a full set of cycles */
