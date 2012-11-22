@@ -78,7 +78,7 @@ int parse_bam_readinfo( samfile_t *fp,
     *bam_x = x;
     *bam_y = y;
     *bam_read = read;
-	*bam_offset = offset;
+	if (bam_offset) *bam_offset = offset;
     return 0;
 }
 
@@ -86,7 +86,7 @@ int parse_bam_readinfo( samfile_t *fp,
 /*
  * cts - parse bam file line
  *
- * returns 0 on success, 1 on expected failure, 2 to ignore this entry.
+ * returns 0 on success, 1 on expected failure
  */
 int
 parse_bam_alignments(
@@ -111,9 +111,7 @@ parse_bam_alignments(
     HashItem *hi;
 
     if (0 == read_buff_size)
-        return 1;
-
-    read_seq[0] = 0;
+        die("ERROR: Invalid read_buff_size");
 
     name = bam1_qname(bam);
     pos = bam->core.pos;
@@ -149,7 +147,7 @@ parse_bam_alignments(
             // CIGAR: alignment match;
             for (k = 0; k < l; j++, k++) {
                 read_mismatch[j] |= BASE_ALIGN;
-				if (read_seq) read_ref[j] = read_seq[j];
+				if (read_ref) read_ref[j] = read_seq[j];
 			}
             break;
         case BAM_CDEL:
