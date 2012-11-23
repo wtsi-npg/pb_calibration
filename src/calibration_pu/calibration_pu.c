@@ -921,8 +921,8 @@ static int updateSurvTable(Settings *s, SurvTable **sts, CifData *cif_data,
  * Assumption: within a single input file, all reads are the same length and
  * we're using unclipped data.
  *
- * Returns: 0 written for success
- *	   -1 for failure
+ * Returns: +'ve integer for success
+ *          0 for failure
  */
 int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, int *nreads) {
 
