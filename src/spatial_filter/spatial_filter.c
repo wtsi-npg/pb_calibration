@@ -719,9 +719,6 @@ int filter_bam(Settings * s, samfile_t * fp_in_bam, samfile_t * fp_out_bam,
 		}
 
 		read_length = bam->core.l_qseq;
-		if (0 == s->read_length[bam_read]) {
-			s->read_length[bam_read] = read_length;
-		}
 
 		if (s->read_length[bam_read] != read_length) {
 			die("Error: inconsistent read lengths within bam file for read %d.\n"
