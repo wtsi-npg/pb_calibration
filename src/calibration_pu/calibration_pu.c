@@ -79,9 +79,6 @@
 #include "pb_config.h"
 #endif
 
-#ifdef HAVE_PREAD
-# define _XOPEN_SOURCE 500 // for pread
-#endif
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
@@ -754,32 +751,6 @@ float GetPu (int n, int data[])
     return (float)Imax/(float)Isum;
 }
 
-#ifdef HAVE_PREAD
-
-# warning "trying to use system pread"
-# define pread_bytes pread
-
-#else
-# warning "using Rob's(?) pread"
-/* Read count bytes at position offset in file fd.  It actually emulates
-   pread(2) as the real thing doesn't seem to be any faster, and it
-   may not be present. */
-static ssize_t pread_bytes(int fd, void *buf, size_t count, off_t offset) {
-    char *b = (char *) buf;
-    ssize_t res;
-    ssize_t total = 0;
-    
-    if (lseek(fd, offset, SEEK_SET) < 0) return -1;
-
-    do {
-        do {
-            res = read(fd, b + total, count - total);
-        } while (res < 0 && EINTR == errno);
-        if (res > 0) total += res;
-    } while (res > 0 && total < count);
-    return res < 0 ? res : total;
-}
-#endif
 
 static int updateSurvTable(Settings *s, SurvTable **sts, CifData *cif_data,
                            size_t spot_num, int tile, int x, int y, int read, int *read_mismatch,
