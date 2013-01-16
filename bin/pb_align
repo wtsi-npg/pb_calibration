@@ -139,7 +139,7 @@ echo "Making bam file $output" >&2
 
 picard_jar="/software/solexa/bin/aligners/illumina2bam/current/BamMerger.jar"
 if [ $read ] ; then
-  picard_parms="VALIDATION_STRINGENCY=SILENT QUIET=true INPUT=$bam ALIGNED=/dev/stdin OUTPUT=$outout"
+  picard_parms="VALIDATION_STRINGENCY=SILENT QUIET=true INPUT=$bam ALIGNED=/dev/stdin OUTPUT=$output"
 else
   picard_parms="VALIDATION_STRINGENCY=SILENT QUIET=true INPUT=$bam ALIGNED=/dev/stdin COMPRESSION_LEVEL=0 OUTPUT=/dev/stdout"
 fi
