@@ -150,9 +150,9 @@ fi
 
 pair=`awk '/[0-9]+ paired in sequencing/ {print $1}' $stat_file`
 if [ $pair -gt 0 ] ; then
-    count=`awk '/[0-9]+ with itself and mate mapped/ {print $1}' $stat_file`
+    count=`awk '/[0-9]+ properly paired/ {print $1}' $stat_file`
     if [ $count -lt 200000 ] ; then
-        echo "Only $count paired reads align < 200000" >&2
+        echo "Only $count properly paired reads < 200000" >&2
         exit 0
     fi
 else

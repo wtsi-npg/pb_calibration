@@ -138,7 +138,11 @@ output=${prefix}.bam
 echo "Making bam file $output" >&2
 
 picard_jar="/software/solexa/bin/aligners/illumina2bam/current/BamMerger.jar"
-picard_parms="VALIDATION_STRINGENCY=SILENT QUIET=true INPUT=$bam ALIGNED=/dev/stdin OUTPUT=/dev/stdout"
+if [ $read ] ; then
+  picard_parms="VALIDATION_STRINGENCY=SILENT QUIET=true INPUT=$bam ALIGNED=/dev/stdin OUTPUT=$output"
+else
+  picard_parms="VALIDATION_STRINGENCY=SILENT QUIET=true INPUT=$bam ALIGNED=/dev/stdin COMPRESSION_LEVEL=0 OUTPUT=/dev/stdout"
+fi
 
 if [ $pf_filter ] ; then
   filter=512
@@ -163,7 +167,7 @@ if [ $read ] ; then
     fi
     bwa samse $ref $sai_files $fastq_files \
      | perl -aF'\t' -ne 'BEGIN{$filter=int(shift)} print unless ($F[1] & $filter || $F[1] & 4)' $filter \
-     | java -Xmx1024M -jar $picard_jar $picard_parms > $output
+     | java -Xmx1024M -jar $picard_jar $picard_parms
 else
     sai1=${prefix}_1.sai
     if [ $bam ] ; then
@@ -197,14 +201,6 @@ if [ ! -s $output ] ; then
     exit 1
 fi
 
-stat_file=${prefix}_flagstat.txt
-samtools flagstat $output > $stat_file
-
-if [ ! -s $stat_file ] ; then
-    echo "failed to create flagstat file" >&2
-    exit 1
-fi
-
 #
 # Spatial Filter options
 # Added 8 Oct 2012 by js10
@@ -223,3 +219,12 @@ if [ $spatial_filter ] ; then
 	mv $output original_${output}
 	mv filtered_${output} $output
 fi
+
+stat_file=${prefix}_flagstat.txt
+samtools flagstat $output > $stat_file
+
+if [ ! -s $stat_file ] ; then
+    echo "failed to create flagstat file" >&2
+    exit 1
+fi
+
