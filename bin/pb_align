@@ -117,8 +117,10 @@ initialise ()
 set -o errexit
 set -o nounset
 
-tools=`dirname $0`
-tools=`readlink -f $tools`
+tools=$(dirname $0)
+tools=$(readlink -f $tools)
+bwa=$(which bwa)
+bwa=$(readlink -e $bwa)
 
 initialise "$@"
 
@@ -157,7 +159,7 @@ if [ $read ] ; then
     else
         fastq_files=$fastq
     fi
-    bwa aln $aln_parms $ref $fastq_files > $sai
+    $bwa aln $aln_parms $ref $fastq_files > $sai
 
     sai_files=$sai
     if [  $bam ] ; then
@@ -165,7 +167,7 @@ if [ $read ] ; then
      else
         fastq_files=$fastq
     fi
-    bwa samse $ref $sai_files $fastq_files \
+    $bwa samse $ref $sai_files $fastq_files \
      | perl -aF'\t' -ne 'BEGIN{$filter=int(shift)} print unless ($F[1] & $filter || $F[1] & 4)' $filter \
      | java -Xmx1024M -jar $picard_jar $picard_parms
 else
@@ -175,7 +177,7 @@ else
     else
         fastq_files=$fastq1
     fi
-    bwa aln $aln_parms $ref $fastq_files > $sai1
+    $bwa aln $aln_parms $ref $fastq_files > $sai1
 
     sai2=${prefix}_2.sai
     if [ $bam ] ; then
@@ -183,7 +185,7 @@ else
     else
         fastq_files=$fastq2
     fi
-    bwa aln $aln_parms $ref $fastq_files > $sai2
+    $bwa aln $aln_parms $ref $fastq_files > $sai2
 
     sai_files="$sai1 $sai2"
     if [ $bam ] ; then
@@ -191,7 +193,7 @@ else
     else
         fastq_files="$fastq1 $fastq2"
     fi
-    bwa sampe $ref $sai_files $fastq_files \
+    $bwa sampe $ref $sai_files $fastq_files \
      | perl -aF'\t' -ne 'BEGIN{$filter=int(shift)} print unless ($F[1] & $filter || ($F[1] & 4 && $F[1] & 8))' $filter \
      | java -Xmx1024M -jar $picard_jar $picard_parms | samtools fixmate - $output
 fi
