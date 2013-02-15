@@ -104,10 +104,9 @@ parse_bam_alignments(
     uint32_t *cigar;
     uint8_t *seq, *qual, *m_ptr;
     char *mismatch = NULL;
-    const char *sep2 = "ACGTN^";
-    const char *cp2;
-    int i, j;
-    int skip = 0, clip, insert, delete;
+    const char *sep = "^ACGTKMRYSWBVHDNacgtkmryswbvhdn";
+    const char *cp;
+    int i, j, skip;
     HashItem *hi;
 
     if (0 == read_buff_size)
@@ -180,61 +179,48 @@ parse_bam_alignments(
         die("ERROR: Inconsistent cigar string %d > %d for read: \"%s\"\n", j, bam->core.l_qseq, name);
     }
 
-    /* clipped sequence is missing from MD */
-    for (i = 0, clip = 0; i < bam->core.l_qseq; i++, clip++)
-        if (0 == (read_mismatch[i] & BASE_SOFT_CLIP))
+    /* clipped sequence or insertions are missing from MD */
+    for (i = 0, skip = 0; i < bam->core.l_qseq; i++, skip++)
+      if (0 == (read_mismatch[i] & (BASE_SOFT_CLIP | BASE_INSERTION)))
             break;
-    if (0 == (read_mismatch[i] & BASE_ALIGN)) {
-        die("ERROR: Inconsistent cigar string expect alignment after soft clip for read: \"%s\"\n", name);
-    }
-    if (clip)
-        skip += clip;
 
-    cp2 = mismatch;
-    while (NULL != (cp2 = parse_next_int(cp2, &j, sep2))) {
+    cp = mismatch;
+    while (NULL != (cp = parse_next_int(cp, &j, sep))) {
         /* skip matching bases, exclude insertions which are missing from MD */
-        for (insert = 0; j > 0; i++)
+        for (; j > 0; i++)
             if (read_mismatch[i] & BASE_INSERTION)
-                insert++;
+                skip++;
             else
                 j--;
-        if (insert)
-            skip += insert;
 
-        if (0 == strlen(cp2))
+        if (0 == strlen(cp))
             /* reached end of MD string */
             break;
 
         /* skip insertions which are missing from MD */
-        for (insert = 0; i < bam->core.l_qseq; i++, insert++)
+        for (; i < bam->core.l_qseq; i++, skip++)
             if (0 == (read_mismatch[i] & BASE_INSERTION))
                 break;
         if (i == bam->core.l_qseq) {
             die("ERROR: Invalid MD string %s for read: \"%s\"\n",
                 mismatch, name);
         }
-        if (insert)
-            skip += insert;
 
-        switch (*cp2) {
+        switch (*cp) {
         case '^':
             /* deletions missing from read_seq */
-            delete = 0;
-            while (NULL != strchr("ACGTN", *(++cp2)))
-                delete++;
-            if (delete)
-                skip -= delete;
+            while(NULL != strchr(sep, *(++cp)))
+                skip--;
             break;
         case 'A':
         case 'C':
         case 'G':
         case 'T':
-        case 'N':
             /* mismatch */
             if (0 == (read_mismatch[i] & BASE_ALIGN)) {
                 die("ERROR: Inconsistent cigar string expect alignment at mismatch for read: \"%s\"\n", name);
             }
-			if (read_ref) read_ref[i] = *cp2;
+			if (read_ref) read_ref[i] = *cp;
             read_mismatch[i] |= BASE_MISMATCH;
 
             pos = bam->core.pos + (i - skip);
@@ -256,16 +242,20 @@ parse_bam_alignments(
             i++;
             break;
         default:
-            die("ERROR: Invalid mismatch %s(%c)\n", mismatch, *cp2);
+            /* treat all other alphabetic characters as a known SNP */
+            while(NULL != strchr(sep, *cp)) 
+            {
+                read_mismatch[i++] |= BASE_KNOWN_SNP;
+                cp++;
+            }
+            break;
         }
     }
 
-    /* clipped sequence is missing from MD */
-    for (clip = 0; i < bam->core.l_qseq; i++, clip++)
-        if (0 == (read_mismatch[i] & BASE_SOFT_CLIP))
+    /* clipped sequence or insertions are missing from MD */
+    for (; i < bam->core.l_qseq; i++)
+        if (0 == (read_mismatch[i] & (BASE_SOFT_CLIP | BASE_INSERTION)))
             break;
-    if (clip)
-        skip += clip;
     if (i != bam->core.l_qseq) {
         die("ERROR: Inconsistent MD string %d != %d for read: \"%s\"\n",
             i, bam->core.l_qseq, name);
