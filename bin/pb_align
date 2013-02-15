@@ -117,8 +117,10 @@ initialise ()
 set -o errexit
 set -o nounset
 
-tools=`dirname $0`
-tools=`readlink -f $tools`
+tools=$(dirname $0)
+tools=$(readlink -f $tools)
+bwa=$(which bwa)
+bwa=$(readlink -e $bwa)
 
 initialise "$@"
 
