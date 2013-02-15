@@ -440,7 +440,7 @@ static int update_bam_qualities(Settings *s, HashTable *ct_hash, CifData *cif_da
     int read_length = s->read_length[read];
     int iregion = -1;
     int c, b;
-    uint8_t *qual;
+    uint8_t *seq, *qual;
     static const int read_buff_size = 1024;
     uint8_t oq[read_buff_size];
     int read_qual[read_buff_size];
@@ -528,6 +528,16 @@ static int update_bam_qualities(Settings *s, HashTable *ct_hash, CifData *cif_da
     qual = bam1_qual(bam);
     for (b = 0; b < read_length; b++)
         qual[b] = read_qual[b];
+
+    /* if base is N set the quality to 0 otherwise set the quality to 1 if it is 0 */
+    seq = bam1_seq(bam);
+    for (b = 0; b < read_length; b++) {
+        char read_seq = bam_nt16_rev_table[bam1_seqi(seq, b)];
+        if (read_seq == 'N')
+            qual[b] = 0;
+        else if (0 == qual[b])
+            qual[b] = 1;
+    }
 
     /* write bam file */
     if( 0 > samwrite(fp_bam, bam)) {
