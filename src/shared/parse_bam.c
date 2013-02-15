@@ -242,7 +242,7 @@ parse_bam_alignments(
             i++;
             break;
         default:
-            /* treat all other alphabetic characters as a known SNP */
+            /* treat all other reference bases as a known SNP */
             while(NULL != strchr(sep, *cp)) 
             {
                 read_mismatch[i++] |= BASE_KNOWN_SNP;
