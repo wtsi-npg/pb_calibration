@@ -367,14 +367,12 @@ static void append_header_text(bam_header_t *header, char* text, int len)
 }
 
 static void bam_header_add_pg(Settings *s, bam_header_t *bam_header) {
-    char *text;
-    char *hl, *endl, *endt;
     char *id = "pb_cal";
     char *pn = "predictor_pu";
     char *pp = NULL;
     char *ds = "A program to apply a calibration table";
-    char *pg;
-    int pgsize, pglen;
+    char *id2, *pg;
+    int id2size, id2num, pgsize, pglen;
 
     if (NULL == bam_header) {
         fprintf(stderr,"ERROR: No bam header\n");
@@ -386,42 +384,60 @@ static void bam_header_add_pg(Settings *s, bam_header_t *bam_header) {
         exit(EXIT_FAILURE);
     }
 
-    text = strdup(bam_header->text);
-
-    hl = text;
-    while (0 < strlen(hl)) {
-        if (NULL == (endl = strchr(hl, '\n'))) {
-            fprintf(stderr,"ERROR: Corrupt bam header \"%s\"\n", hl);
-            exit(EXIT_FAILURE);
-        }
-        *endl = 0;
-        if (0 == memcmp(hl, "@PG", 3)) {
-            if (NULL == (pp = strstr(hl, "ID:"))) {
-                fprintf(stderr,"ERROR: No ID in PG line \"%s\"\n", hl);
-                exit(EXIT_FAILURE);
+    id2size = 10 + strlen(id);
+    id2 = smalloc(id2size);
+    id2num = 0;
+    while(id2num < 10) {
+        char *text = strdup(bam_header->text);
+        char *hl, *endl, *endt;
+        sprintf(id2, (id2num > 0 ? "%s%d" : "%s"), id, id2num);
+        hl = text;
+        while (0 < strlen(hl)) {
+            if (NULL == (endl = strchr(hl, '\n'))) {
+                die("ERROR: Corrupt bam header \"%s\"\n", hl);
             }
-            pp += 3;
-            if (NULL != (endt = strchr(pp, '\t'))) {
-                *endt = 0;
+            *endl = 0;
+            if (0 == memcmp(hl, "@PG", 3)) {
+                if (NULL == (pp = strstr(hl, "ID:"))) {
+                    die("ERROR: No ID in PG line \"%s\"\n", hl);
+                }
+                pp += 3;
+                if (NULL != (endt = strchr(pp, '\t'))) {
+                    *endt = 0;
+                }
+                if (0 == strcmp(pp, id2)) {
+                    /* an existing ID matches the new ID */
+                    break;
+                }
             }
+            hl = endl + 1;
         }
-        hl = endl + 1;
+        if( 0 == strlen(hl)) {
+            /* the new ID doesn't match an existing ID */
+            free(text);
+            break;
+        }
+        /* the new ID matches an existing ID, increment the number and try again */
+        id2num++;
+        free(text);
     }
-    
+    if (id2num == 10) {
+        die("ERROR: Header already contains PG lines with ID=%s .. ID=%s\n", id, id2);
+    }
+
     pgsize = 128 + strlen(pn) + strlen(pn) + strlen(ds) + strlen(version) + strlen(s->cmdline);
     if( NULL != pp ){
         pgsize += strlen(pp);
         pg = smalloc(pgsize);
-        pglen = snprintf(pg, pgsize, "@PG\tID:%s\tPN:%s\tPP:%s\tDS:%s\tVN:%s\tCL:%s\n", id, pn, pp, ds, version, s->cmdline);
+        pglen = snprintf(pg, pgsize, "@PG\tID:%s\tPN:%s\tPP:%s\tDS:%s\tVN:%s\tCL:%s\n", id2, pn, pp, ds, version, s->cmdline);
     }else{
         pg = smalloc(pgsize);
-        pglen = snprintf(pg, pgsize, "@PG\tID:%s\tPN:%s\tDS:%s\tVN:%s\tCL:%s\n", pn, pn, ds, version, s->cmdline);
+        pglen = snprintf(pg, pgsize, "@PG\tID:%s\tPN:%s\tDS:%s\tVN:%s\tCL:%s\n", id2, pn, ds, version, s->cmdline);
     }
     assert(pglen < pgsize);
     
     append_header_text(bam_header, pg, pglen);
 
-    free(text);
     free(pg);
 }
 

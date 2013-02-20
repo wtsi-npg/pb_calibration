@@ -513,13 +513,11 @@ static void append_header_text(bam_header_t * header, char *text, int len)
 
 static void bam_header_add_pg(Settings *s, bam_header_t *bam_header, char *cl, char *id)
 {
-	char *text;
-	char *hl, *endl, *endt;
 	char *pn = "spatial_filter";
 	char *pp = NULL;
 	char *ds = "A program to apply a spatial filter";
-	char *pg;
-	int pgsize, pglen;
+	char *id2, *pg;
+	int id2size, id2num, pgsize, pglen;
 
 	if (NULL == bam_header) {
 		die("ERROR: No bam header\n");
@@ -529,25 +527,46 @@ static void bam_header_add_pg(Settings *s, bam_header_t *bam_header, char *cl, c
 		die("ERROR: No text in bam header\n");
 	}
 
-	text = strdup(bam_header->text);
-
-	hl = text;
-	while (0 < strlen(hl)) {
-		if (NULL == (endl = strchr(hl, '\n'))) {
-			die("ERROR: Corrupt bam header \"%s\"\n", hl);
-		}
-		*endl = 0;
-		if (0 == memcmp(hl, "@PG", 3)) {
-			if (NULL == (pp = strstr(hl, "ID:"))) {
-				die("ERROR: No ID in PG line \"%s\"\n", hl);
-			}
-			pp += 3;
-			if (NULL != (endt = strchr(pp, '\t'))) {
-				*endt = 0;
-			}
-		}
-		hl = endl + 1;
-	}
+        id2size = 10 + strlen(id);
+        id2 = smalloc(id2size);
+        id2num = 0;
+        while(id2num < 10) {
+                char *text = strdup(bam_header->text);
+                char *hl, *endl, *endt;
+                sprintf(id2, (id2num > 0 ? "%s%d" : "%s"), id, id2num);
+                hl = text;
+                while (0 < strlen(hl)) {
+                        if (NULL == (endl = strchr(hl, '\n'))) {
+                                die("ERROR: Corrupt bam header \"%s\"\n", hl);
+                        }
+                        *endl = 0;
+                        if (0 == memcmp(hl, "@PG", 3)) {
+                                if (NULL == (pp = strstr(hl, "ID:"))) {
+                                        die("ERROR: No ID in PG line \"%s\"\n", hl);
+                                }
+                                pp += 3;
+                                if (NULL != (endt = strchr(pp, '\t'))) {
+                                        *endt = 0;
+                                }
+                                if (0 == strcmp(pp, id2)) {
+                                        /* an existing ID matches the new ID */
+                                        break;
+                                }
+                        }
+                        hl = endl + 1;
+                }
+                if( 0 == strlen(hl)) {
+                        /* the new ID doesn't match an existing ID */
+                        free(text);
+                        break;
+                }
+                /* the new ID matches an existing ID, increment the number and try again */
+                id2num++;
+                free(text);
+        }
+        if (id2num == 10) {
+            die("ERROR: Header already contains PG lines with ID=%s .. ID=%s\n", id, id2);
+        }
 
 	pgsize = 128 + strlen(pn) + strlen(pn) + strlen(ds) + strlen(version) + strlen(cl);
 	if (NULL != pp) {
@@ -555,18 +574,17 @@ static void bam_header_add_pg(Settings *s, bam_header_t *bam_header, char *cl, c
 		pg = smalloc(pgsize);
 		pglen =
 		    snprintf(pg, pgsize,
-			     "@PG\tID:%s\tPN:%s\tPP:%s\tDS:%s\tVN:%s\tCL:%s\n", id, pn, pp, ds, version, cl);
+			     "@PG\tID:%s\tPN:%s\tPP:%s\tDS:%s\tVN:%s\tCL:%s\n", id2, pn, pp, ds, version, cl);
 	} else {
 		pg = smalloc(pgsize);
 		pglen =
 		    snprintf(pg, pgsize,
-			     "@PG\tID:%s\tPN:%s\tDS:%s\tVN:%s\tCL:%s\n", pn, pn, ds, version, cl);
+			     "@PG\tID:%s\tPN:%s\tDS:%s\tVN:%s\tCL:%s\n", id2, pn, ds, version, cl);
 	}
 	assert(pglen < pgsize);
 
 	append_header_text(bam_header, pg, pglen);
 
-	free(text);
 	free(pg);
 }
 
