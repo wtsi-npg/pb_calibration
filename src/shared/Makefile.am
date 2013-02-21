@@ -17,6 +17,9 @@ BUILT_SOURCES = version.h
 version:
 
 version.h: version
-	echo -n const char *version = \" > version.h
+	echo '#ifndef PB_VERSION' > version.h
+	echo '#define PB_VERSION' >> version.h
+	echo -n const static char *version = \" >> version.h
 	../../bin/gitver | tr -d "\n" >> version.h
 	echo \"\; >> version.h
+	echo '#endif' >> version.h
