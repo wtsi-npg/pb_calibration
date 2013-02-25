@@ -895,7 +895,7 @@ void applyFilter(Settings *s)
 
 	out_bam_header = bam_header_dup(fp_input_bam->header);
 	char concat_cmd[2048];
-	strcat(concat_cmd, hdr.cmdLine);
+	strcpy(concat_cmd, hdr.cmdLine);
 	strcat(concat_cmd, " ; ");
 	strcat(concat_cmd, s->cmdline);
 	bam_header_add_pg("spf", "spatial_filter", "A program to apply a spatial filter", concat_cmd, out_bam_header);
