@@ -205,12 +205,12 @@ echo "Making spatial filter..." >&2
 # Added 8 Oct 2012 by js10
 #
 if [ $spatial_filter ] ; then
-	$tools/spatial_filter -c -f $sf_parms -i $intensity_dir --filter ${output}.filter $output
+	$tools/spatial_filter -c $sf_parms -i $intensity_dir --filter ${output}.filter $output
 	if [ ! -s ${output}.filter ] ; then
 		echo "spatial_filter failed to create a filter file ${output}.filter" >&2
 		exit 1
 	fi
-	$tools/spatial_filter -a -f --filter ${output}.filter -o filtered_${output} $output
+	$tools/spatial_filter -a --filter ${output}.filter -o filtered_${output} $output
 	if [ ! -s filtered_${output} ] ; then
 		echo "spatial_filter failed to apply filter and produce filtered_${output}" >&2
 		exit 1
