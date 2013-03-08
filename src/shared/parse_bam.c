@@ -302,8 +302,7 @@ static void append_header_text(bam_header_t *header, char* text, int len)
 
 void bam_header_add_pg(char *id, char *pn, char *ds, char *cl, bam_header_t *bam_header)
 {
-	char *pp = NULL;
-	char *id2, *pg;
+        char *text, *id2, *pp = NULL, *pg;
 	int id2size, id2num, pgsize, pglen;
 
 	if (NULL == bam_header) {
@@ -313,13 +312,14 @@ void bam_header_add_pg(char *id, char *pn, char *ds, char *cl, bam_header_t *bam
 	if (NULL == bam_header->text) {
 		die("ERROR: No text in bam header\n");
 	}
+	text = strdup(bam_header->text);
 
         id2size = 10 + strlen(id);
         id2 = smalloc(id2size);
         id2num = 0;
         while(id2num < 10) {
-                char *text = strdup(bam_header->text);
                 char *hl, *endl, *endt;
+                strcpy(text, bam_header->text);
                 sprintf(id2, (id2num > 0 ? "%s%d" : "%s"), id, id2num);
                 hl = text;
                 while (0 < strlen(hl)) {
@@ -344,12 +344,10 @@ void bam_header_add_pg(char *id, char *pn, char *ds, char *cl, bam_header_t *bam
                 }
                 if( 0 == strlen(hl)) {
                         /* the new ID doesn't match an existing ID */
-                        free(text);
                         break;
                 }
                 /* the new ID matches an existing ID, increment the number and try again */
                 id2num++;
-                free(text);
         }
         if (id2num == 10) {
             die("ERROR: Header already contains PG lines with ID=%s .. ID=%s\n", id, id2);
@@ -373,4 +371,5 @@ void bam_header_add_pg(char *id, char *pn, char *ds, char *cl, bam_header_t *bam
 	append_header_text(bam_header, pg, pglen);
 
 	free(pg);
+        free(text);
 }
