@@ -22,12 +22,13 @@ initialise ()
     ref=""
     prefix=""
     aln_parms=""
+    sam_parms=""
     spatial_filter=""
     intensity_dir=""
     sf_parms=""
     bam_join_jar="/software/solexa/bin/aligners/illumina2bam/current/BamMerger.jar"
 
-    TEMP=`getopt -a -o h --long bam:,read:,read1:,read2:,pf_filter,ref:,aln_parms:,spatial_filter,intensity_dir:,sf_parms:,bam_join_jar:,prefix:,help -n $0 -- "$@"`
+    TEMP=`getopt -a -o h --long bam:,read:,read1:,read2:,pf_filter,ref:,aln_parms:,sam_parms:,spatial_filter,intensity_dir:,sf_parms:,bam_join_jar:,prefix:,help -n $0 -- "$@"`
 
     if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
 
@@ -42,6 +43,7 @@ initialise ()
             --pf_filter) pf_filter=1; echo "will purity filter" >&2; shift 1 ;;
             --ref) ref=$2; echo "reference $ref" >&2; shift 2 ;;
             --aln_parms) aln_parms=$2; echo "aln_parms options $aln_parms" >&2; shift 2 ;;
+            --sam_parms) sam_parms=$2; echo "sam_parms options $sam_parms" >&2; shift 2 ;;
  	    --spatial_filter) spatial_filter=1; echo "will apply spatial_filter" >&2; shift 1 ;;
             --intensity_dir) intensity_dir=$2; echo "intensity_dir $intensity_dir" >&2; shift 2 ;;
 	    --sf_parms) sf_parms=$2; echo "sf_parms options $sf_parms" >&2; shift 2 ;;
@@ -64,6 +66,9 @@ initialise ()
                        echo "       --ref <ref>          full path to reference";
                        echo "                   ";
                        echo "       --aln_parms <bwa aln parameters>";
+                       echo "                             no default";
+                       echo "                   ";
+                       echo "       --sam_parms <bwa sam{se,pe} parameters>";
                        echo "                             no default";
                        echo "                   ";
                        echo "                   ";
@@ -165,7 +170,7 @@ if [ $read ] ; then
     sai=${prefix}.sai
     bwa aln $aln_parms $ref -b${read} $bam > $sai
 
-    bwa samse $ref $sai $bam \
+    bwa samse $sam_parms $ref $sai $bam \
      | perl -aF'\t' -ne 'BEGIN{$filter=int(shift)} print unless ($F[1] & $filter || $F[1] & 4)' $filter \
      | java -Xmx1024M -jar $bam_join_jar $picard_parms
 else
@@ -175,7 +180,7 @@ else
     sai2=${prefix}_2.sai
     bwa aln $aln_parms $ref -b2 $bam > $sai2
 
-    bwa sampe $ref $sai1 $sai2 $bam $bam \
+    bwa sampe $sam_parms $ref $sai1 $sai2 $bam $bam \
      | perl -aF'\t' -ne 'BEGIN{$filter=int(shift)} print unless ($F[1] & $filter || ($F[1] & 4 && $F[1] & 8))' $filter \
      | java -Xmx1024M -jar $bam_join_jar $picard_parms | samtools fixmate - $output
 fi
