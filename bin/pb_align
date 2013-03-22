@@ -219,13 +219,14 @@ if [ $spatial_filter ] ; then
 		echo "spatial_filter failed to create a filter file ${output}.filter" >&2
 		exit 1
 	fi
-	$tools/spatial_filter -a --filter ${output}.filter -o filtered_${output} $output
-	if [ ! -s filtered_${output} ] ; then
-		echo "spatial_filter failed to apply filter and produce filtered_${output}" >&2
+	filtered_bam=$(echo ${output} | sed -r 's/([^/]+)$/filtered_\1/')
+	$tools/spatial_filter -a --filter ${output}.filter -o $filtered_bam $output
+	if [ ! -s $filtered_bam ] ; then
+		echo "spatial_filter failed to apply filter and produce $filtered_bam" >&2
 		exit 1
 	fi
-	mv $output original_${output}
-	mv filtered_${output} $output
+	mv $output $(echo ${output} | sed -r 's/([^/]+)$/original_\1/')
+	mv $filtered_bam $output
 fi
 
 stat_file=${prefix}_flagstat.txt

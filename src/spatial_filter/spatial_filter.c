@@ -818,7 +818,7 @@ void calculateFilter(Settings *s)
 
 	fp_input_bam = samopen(s->in_bam_file, "rb", 0);
 	if (NULL == fp_input_bam) {
-		die("ERROR: can't open bam file file %s: %s\n", s->in_bam_file, strerror(errno));
+		die("ERROR: can't open bam file %s: %s\n", s->in_bam_file, strerror(errno));
 	}
 
         if( NULL == s->filter) {
@@ -890,7 +890,7 @@ void applyFilter(Settings *s)
 
 	fp_input_bam = samopen(s->in_bam_file, "rb", 0);
 	if (NULL == fp_input_bam) {
-		die("ERROR: can't open bam file file %s: %s\n", s->in_bam_file, strerror(errno));
+		die("ERROR: can't open bam file %s: %s\n", s->in_bam_file, strerror(errno));
 	}
 
 	out_bam_header = bam_header_dup(fp_input_bam->header);
@@ -900,10 +900,10 @@ void applyFilter(Settings *s)
 	strcat(concat_cmd, s->cmdline);
 	bam_header_add_pg("spf", "spatial_filter", "A program to apply a spatial filter", concat_cmd, out_bam_header);
 
-	out_bam_file = (NULL == s->output ? aprintf("/dev/stdout") : aprintf("%s/%s", s->working_dir, s->output));
+	out_bam_file = (NULL == s->output ? aprintf("/dev/stdout") : ((s->output)[0] == '/' ? aprintf("%s", s->output) : aprintf("%s/%s", s->working_dir, s->output)));
 	fp_output_bam = samopen(out_bam_file, out_mode, out_bam_header);
 	if (NULL == fp_output_bam) {
-		die("ERROR: can't open bam file file %s: %s\n", out_bam_file, strerror(errno));
+		die("ERROR: can't open bam file %s: %s\n", out_bam_file, strerror(errno));
 	}
 	free(out_bam_file);
 
@@ -930,7 +930,7 @@ void dumpBAM(Settings *s)
 
 		fp_input_bam = samopen(s->in_bam_file, "rb", 0);
 		if (NULL == fp_input_bam) {
-			die("ERROR: can't open bam file file %s: %s\n", s->in_bam_file, strerror(errno));
+			die("ERROR: can't open bam file %s: %s\n", s->in_bam_file, strerror(errno));
 		}
 
 		if (0 != dump_bam_file(s, fp_input_bam, &nreads)) {
