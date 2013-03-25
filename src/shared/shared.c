@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <assert.h>
 #include "die.h"
 #include <smalloc.h>
 
@@ -259,3 +260,28 @@ char *get_real_path_name(const char* in_path) {
 }
 
 
+char *get_command_line(int argc, char **argv) {
+    char *cmdline = NULL;
+    size_t sz = argc; /* All the spaces & the terminating \0 */
+    size_t pos = 0;
+    int i;
+
+    for (i = 0; i < argc; i++) {
+        sz += strlen(argv[i]);
+    }
+
+    cmdline = smalloc(sz);
+
+    for (i = 0; i < argc && pos < sz; i++) {
+        int len = snprintf(cmdline + pos, sz - pos,
+                           i > 0 ? " %s" : "%s", argv[i]);
+        if (len < 0) {
+            perror("snprintf");
+            exit(EXIT_FAILURE);
+        }
+        pos += len;
+    }
+    assert(pos < sz);
+    
+    return cmdline;
+}
