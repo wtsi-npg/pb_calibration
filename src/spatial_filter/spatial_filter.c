@@ -688,29 +688,6 @@ int filter_bam(Settings * s, samfile_t * fp_in_bam, samfile_t * fp_out_bam,
 	return 0;
 }
 
-/*
- * Get the absolute file path and (depending on the libc) the real
- * name for sym-link dirs in path.
- * Safe for in_path == out_path case.
- */
-static char *get_real_path_name(const char *in_path)
-{
-	char *oldwd;
-	char *out_path;
-
-	oldwd = getcwd(NULL,0);
-	if (NULL == oldwd)
-		return NULL;
-
-	checked_chdir(in_path);
-
-	out_path = getcwd(NULL,0);
-
-	checked_chdir(oldwd);
-	free(oldwd);
-
-	return out_path;
-}
 
 static void usage(int code)
 {

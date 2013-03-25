@@ -593,46 +593,6 @@ int recalibrate_bam(Settings *s, HashTable *ct_hash, samfile_t *fp_in_bam, samfi
     return 0;
 }
 
-static char * alloc_getcwd(void) {
-    size_t sz = 1024;
-    char *out = smalloc(sz);
-    
-    while (NULL == getcwd(out, sz)) {
-        if (ERANGE != errno) {
-            free(out);
-            return NULL;
-        }
-
-        sz *= 2;
-        out = srealloc(out, sz);
-    }
-
-    return out;
-}
-
-/*
- * Get the absolute file path and (depending on the libc) the real
- * name for sym-link dirs in path.
- * Safe for in_path == out_path case.
- */
-static char * get_real_path_name(const char* in_path) {
-    char   *oldwd;
-    char   *out_path;
-
-    oldwd = alloc_getcwd();
-    if (NULL == oldwd) return NULL;
-
-    checked_chdir(in_path);
-
-    out_path = alloc_getcwd();
-    
-    checked_chdir(oldwd);
-    free(oldwd);
-
-    return out_path;
-}
-
-
 
 static
 void usage(int code) {

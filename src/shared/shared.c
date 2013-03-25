@@ -1,8 +1,11 @@
+#include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include "die.h"
+#include <smalloc.h>
+
 
 static char *complement_table = NULL;
 
@@ -211,4 +214,48 @@ void checked_chdir(const char *dir)
     if (chdir(dir)) die("ERROR: failed to change directory to: %s\n", dir);
 
 }
+
+/*
+ * Get current working directory (allocating memory for string)
+ * Consider defining away with getcwd(NULL,0)....
+ */
+char *alloc_getcwd(void) {
+    size_t sz = 1024;
+    char *out = smalloc(sz);
+    
+    while (NULL == getcwd(out, sz)) {
+        if (ERANGE != errno) {
+            free(out);
+            return NULL;
+        }
+
+        sz *= 2;
+        out = srealloc(out, sz);
+    }
+
+    return out;
+}
+
+/*
+ * Get the absolute file path and (depending on the libc) the real
+ * name for sym-link dirs in path.
+ * Safe for in_path == out_path case.
+ */
+char *get_real_path_name(const char* in_path) {
+    char   *oldwd;
+    char   *out_path;
+
+    oldwd = alloc_getcwd();
+    if (NULL == oldwd) return NULL;
+
+    checked_chdir(in_path);
+
+    out_path = alloc_getcwd();
+    
+    checked_chdir(oldwd);
+    free(oldwd);
+
+    return out_path;
+}
+
 
