@@ -471,25 +471,6 @@ int dump_bam_file(Settings *s, samfile_t *fp_bam, size_t *nreads)
 	return 0;
 }
 
-/* copied from sam.c */
-
-static bam_header_t *bam_header_dup(const bam_header_t * h0)
-{
-	bam_header_t *h;
-	int i;
-	h = bam_header_init();
-	*h = *h0;
-	h->hash = h->dict = h->rg2lib = 0;
-	h->text = (char *)calloc(h->l_text + 1, 1);
-	memcpy(h->text, h0->text, h->l_text);
-	h->target_len = (uint32_t *) calloc(h->n_targets, 4);
-	h->target_name = (char **)calloc(h->n_targets, sizeof(void *));
-	for (i = 0; i < h->n_targets; ++i) {
-		h->target_len[i] = h0->target_len[i];
-		h->target_name[i] = strdup(h0->target_name[i]);
-	}
-	return h;
-}
 
 
 static int updateRegionTable(Settings *s, int itile, int read, int x, int y, int *read_mismatch)
@@ -688,29 +669,6 @@ int filter_bam(Settings * s, samfile_t * fp_in_bam, samfile_t * fp_out_bam,
 	return 0;
 }
 
-/*
- * Get the absolute file path and (depending on the libc) the real
- * name for sym-link dirs in path.
- * Safe for in_path == out_path case.
- */
-static char *get_real_path_name(const char *in_path)
-{
-	char *oldwd;
-	char *out_path;
-
-	oldwd = getcwd(NULL,0);
-	if (NULL == oldwd)
-		return NULL;
-
-	checked_chdir(in_path);
-
-	out_path = getcwd(NULL,0);
-
-	checked_chdir(oldwd);
-	free(oldwd);
-
-	return out_path;
-}
 
 static void usage(int code)
 {
@@ -782,32 +740,6 @@ static void usage(int code)
 	exit(code);
 }
 
-char *get_command_line(int argc, char **argv)
-{
-	char *cmdline = NULL;
-	size_t sz = argc;	/* All the spaces & the terminating \0 */
-	size_t pos = 0;
-	int i;
-
-	for (i = 0; i < argc; i++) {
-		sz += strlen(argv[i]);
-	}
-
-	cmdline = smalloc(sz);
-
-	for (i = 0; i < argc && pos < sz; i++) {
-		int len = snprintf(cmdline + pos, sz - pos,
-				   i > 0 ? " %s" : "%s", argv[i]);
-		if (len < 0) {
-			perror("snprintf");
-			exit(EXIT_FAILURE);
-		}
-		pos += len;
-	}
-	assert(pos < sz);
-
-	return cmdline;
-}
 
 void calculateFilter(Settings *s)
 {
