@@ -329,25 +329,6 @@ int Get_bin_purity(CalTable *ct, int value)
     return ibin;
 }
 
-/* copied from sam.c */
-
-static bam_header_t *bam_header_dup(const bam_header_t *h0)
-{
-	bam_header_t *h;
-	int i;
-	h = bam_header_init();
-	*h = *h0;
-	h->hash = h->dict = h->rg2lib = 0;
-	h->text = (char*)calloc(h->l_text + 1, 1);
-	memcpy(h->text, h0->text, h->l_text);
-	h->target_len = (uint32_t*)calloc(h->n_targets, 4);
-	h->target_name = (char**)calloc(h->n_targets, sizeof(void*));
-	for (i = 0; i < h->n_targets; ++i) {
-		h->target_len[i] = h0->target_len[i];
-		h->target_name[i] = strdup(h0->target_name[i]);
-	}
-	return h;
-}
 
 
 /*
