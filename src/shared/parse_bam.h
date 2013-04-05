@@ -29,4 +29,4 @@ void bam_header_add_pg(       char *id,
                               char *cl,
                       bam_header_t *bam_header);
 
-
+bam_header_t *bam_header_dup(const bam_header_t *h0); /* just because it's not in bam.h in samtools 0.18 ...*/

@@ -22,11 +22,13 @@ initialise ()
     ref=""
     prefix=""
     aln_parms=""
+    sam_parms=""
     spatial_filter=""
     intensity_dir=""
     sf_parms=""
+    bam_join_jar="/software/solexa/bin/aligners/illumina2bam/current/BamMerger.jar"
 
-    TEMP=`getopt -a -o h --long bam:,read:,read1:,read2:,pf_filter,ref:,aln_parms:,spatial_filter,intensity_dir:,sf_parms:,prefix:,help -n $0 -- "$@"`
+    TEMP=`getopt -a -o h --long bam:,read:,read1:,read2:,pf_filter,ref:,aln_parms:,sam_parms:,spatial_filter,intensity_dir:,sf_parms:,bam_join_jar:,prefix:,help -n $0 -- "$@"`
 
     if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
 
@@ -41,38 +43,45 @@ initialise ()
             --pf_filter) pf_filter=1; echo "will purity filter" >&2; shift 1 ;;
             --ref) ref=$2; echo "reference $ref" >&2; shift 2 ;;
             --aln_parms) aln_parms=$2; echo "aln_parms options $aln_parms" >&2; shift 2 ;;
+            --sam_parms) sam_parms=$2; echo "sam_parms options $sam_parms" >&2; shift 2 ;;
  	    --spatial_filter) spatial_filter=1; echo "will apply spatial_filter" >&2; shift 1 ;;
             --intensity_dir) intensity_dir=$2; echo "intensity_dir $intensity_dir" >&2; shift 2 ;;
 	    --sf_parms) sf_parms=$2; echo "sf_parms options $sf_parms" >&2; shift 2 ;;
+	    --bam_join_jar) bam_join_jar=$2; echo "bam_join_jar $bam_join_jar" >&2; shift 2 ;;
             --prefix) prefix=$2; echo "prefix $prefix" >&2; shift 2 ;;
             -h|--help) echo "Usage: $0 [options]";
                        echo "                   ";
-                       echo "       -bam <bam file>";
+                       echo "       --bam <bam file>";
                        echo "                   ";
-                       echo "       -read <read>        0-single-ended read in bam file, 1-first read in bam file, 2-second read in bam file";
+                       echo "       --read <read>        0-single-ended read in bam file, 1-first read in bam file, 2-second read in bam file";
                        echo "                             single read, no default";
-                       echo "       -read1 <read1>      1-first read in bam file, 2-second read in bam file";
-                       echo "       -read2 <read2>      1-first read in bam file, 2-second read in bam file";
+                       echo "       --read1 <read1>      1-first read in bam file, 2-second read in bam file";
+                       echo "       --read2 <read2>      1-first read in bam file, 2-second read in bam file";
                        echo "                             paired reads, no default";
                        echo "                   ";
-                       echo "       -pf_filter          purity filter reads";
+                       echo "       --pf_filter          purity filter reads";
                        echo "                             default do not purity filter reads";
                        echo "                   ";
                        echo "                   ";
-                       echo "       -ref <ref>          full path to reference";
+                       echo "       --ref <ref>          full path to reference";
                        echo "                   ";
-                       echo "       -aln_parms <bwa aln parameters>";
+                       echo "       --aln_parms <bwa aln parameters>";
+                       echo "                             no default";
+                       echo "                   ";
+                       echo "       --sam_parms <bwa sam{se,pe} parameters>";
                        echo "                             no default";
                        echo "                   ";
                        echo "                   ";
-                       echo "       -spatial_filter     apply spatial filtering to the bam files";
+                       echo "       --spatial_filter     apply spatial filtering to the bam files";
                        echo "                   ";
-                       echo "       -intensity_dir <raw intensity directory>";
+                       echo "       --intensity_dir <raw intensity directory>";
                        echo "                   ";
-                       echo "       -sf_parms <spatial_filter parameters>";
+                       echo "       --sf_parms <spatial_filter parameters>";
                        echo "                             no default";
                        echo "                   ";
-                       echo "       -prefix <prefix>    output file prefix";
+                       echo "       --bam_join_jar <bam join jar inc. full path>";
+                       echo "                   ";
+                       echo "       --prefix <prefix>    output file prefix";
                        echo "                             no default";
                        echo "                   ";
                        echo "       -h|--help   ";
@@ -112,17 +121,23 @@ initialise ()
         echo "You must supply a prefix" >&2
         exit 1
     fi
+
+    if [ ! -r $bam_join_jar ] ; then
+        echo "Cannot read bam join jar $bam_join_jar" >&2
+        exit 1
+    fi
 }
 
 set -o errexit
 set -o nounset
 
+initialise "$@"
+
 tools=$(dirname $0)
-tools=$(readlink -f $tools)
+tools=$(readlink -e $tools)
 bwa=$(which bwa)
 bwa=$(readlink -e $bwa)
-
-initialise "$@"
+bam_join_jar=$(readlink -e $bam_join_jar)
 
 if [ -z $ref ] ; then
   echo "You must specify the full path to the reference" >&2
@@ -139,7 +154,6 @@ fi
 output=${prefix}.bam
 echo "Making bam file $output" >&2
 
-picard_jar="/software/solexa/bin/aligners/illumina2bam/current/BamMerger.jar"
 if [ $read ] ; then
   picard_parms="VALIDATION_STRINGENCY=SILENT QUIET=true INPUT=$bam ALIGNED=/dev/stdin OUTPUT=$output"
 else
@@ -156,9 +170,9 @@ if [ $read ] ; then
     sai=${prefix}.sai
     bwa aln $aln_parms $ref -b${read} $bam > $sai
 
-    bwa samse $ref $sai $bam \
+    bwa samse $sam_parms $ref $sai $bam \
      | perl -aF'\t' -ne 'BEGIN{$filter=int(shift)} print unless ($F[1] & $filter || $F[1] & 4)' $filter \
-     | java -Xmx1024M -jar $picard_jar $picard_parms
+     | java -Xmx1024M -jar $bam_join_jar $picard_parms
 else
     sai1=${prefix}_1.sai
     bwa aln $aln_parms $ref -b1 $bam > $sai1
@@ -166,9 +180,9 @@ else
     sai2=${prefix}_2.sai
     bwa aln $aln_parms $ref -b2 $bam > $sai2
 
-    bwa sampe $ref $sai1 $sai2 $bam $bam \
+    bwa sampe $sam_parms $ref $sai1 $sai2 $bam $bam \
      | perl -aF'\t' -ne 'BEGIN{$filter=int(shift)} print unless ($F[1] & $filter || ($F[1] & 4 && $F[1] & 8))' $filter \
-     | java -Xmx1024M -jar $picard_jar $picard_parms | samtools fixmate - $output
+     | java -Xmx1024M -jar $bam_join_jar $picard_parms | samtools fixmate - $output
 fi
 
 if [ ! -s $output ] ; then
@@ -210,13 +224,14 @@ if [ $spatial_filter ] ; then
 		echo "spatial_filter failed to create a filter file ${output}.filter" >&2
 		exit 1
 	fi
-	$tools/spatial_filter -a --filter ${output}.filter -o filtered_${output} $output
-	if [ ! -s filtered_${output} ] ; then
-		echo "spatial_filter failed to apply filter and produce filtered_${output}" >&2
+	filtered_bam=$(echo ${output} | sed -r 's/([^/]+)$/filtered_\1/')
+	$tools/spatial_filter -a --filter ${output}.filter -o $filtered_bam $output
+	if [ ! -s $filtered_bam ] ; then
+		echo "spatial_filter failed to apply filter and produce $filtered_bam" >&2
 		exit 1
 	fi
-	mv $output original_${output}
-	mv filtered_${output} $output
+	mv $output $(echo ${output} | sed -r 's/([^/]+)$/original_\1/')
+	mv $filtered_bam $output
 fi
 
 stat_file=${prefix}_flagstat.txt
