@@ -351,6 +351,7 @@ static int update_bam_qualities(Settings *s, HashTable *ct_hash, CifData *cif_da
     uint8_t oq[read_buff_size];
     int read_qual[read_buff_size];
 
+    assert(read_buff_size >= read_length);
     assert((cstart + read_length) <= cif_data->ncycles);
 
     if (s->spatial_filter) iregion = xy2region(x, y, s->region_size, s->nregions_x, s->nregions_y);

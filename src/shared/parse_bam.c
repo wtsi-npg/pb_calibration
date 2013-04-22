@@ -121,6 +121,7 @@ parse_bam_alignments(
     seq = bam1_seq(bam);
     qual = bam1_qual(bam);
     m_ptr = bam_aux_get(bam, "MD");
+    assert(read_buff_size > bam->core.l_qseq);
 
     if (NULL == m_ptr) {
         die("ERROR: No mismatch for read: \"%s\"\n", name);
