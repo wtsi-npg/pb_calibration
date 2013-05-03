@@ -507,6 +507,8 @@ int recalibrate_bam(Settings *s, HashTable *ct_hash, samfile_t *fp_in_bam, samfi
         }
 
         if (bam_tile != tile) {
+            int nct;
+
             tile = bam_tile;
             
             if (!s->quiet) fprintf(stderr, "Processing tile %i (%lu)\n", tile, nreads_bam);
@@ -532,12 +534,11 @@ int recalibrate_bam(Settings *s, HashTable *ct_hash, samfile_t *fp_in_bam, samfi
             }
 
             /* reset cycle ct */
-            if (NULL == cycle_cts) {
-                int nct = (s->spatial_filter ? N_STATES : 1) * cif_data->ncycles;
+            nct = (s->spatial_filter ? N_STATES : 1) * cif_data->ncycles;
+            if (NULL == cycle_cts)
                 cycle_cts = smalloc(nct * sizeof(CalTable *));
-                for(cycle=0; cycle<nct; cycle++)
-                    cycle_cts[cycle] = NULL;
-            }
+            for(cycle=0; cycle<nct; cycle++)
+                cycle_cts[cycle] = NULL;
 
             // lookup itile from tile in tile hash
             HashItem *tileItem = HashTableSearch(tile_hash, (char *)&tile, sizeof(tile));
@@ -548,7 +549,7 @@ int recalibrate_bam(Settings *s, HashTable *ct_hash, samfile_t *fp_in_bam, samfi
   	         HashData hd;
                  hd.i = ntiles_bam++;
                  if (HashTableAdd(tile_hash, (char *)&tile, sizeof(tile), hd, NULL) == NULL)
-                     die("Failed to add tile %d to tile_hash\n", bam_tile);
+                     die("Failed to add tile %d to tile_hash\n", tile);
             }
         }
 
@@ -570,11 +571,11 @@ int recalibrate_bam(Settings *s, HashTable *ct_hash, samfile_t *fp_in_bam, samfi
                         cycle_cts[state * cif_data->ncycles + c] = (CalTable *)hi->data.p;
                     }
                 } else {
-                    snprintf(key, sizeof(key), "%d:%d:%d", tile, bam_read, b);
+                    snprintf(key, sizeof(key), "%d:%d:%d", bam_tile, bam_read, b);
                     if (NULL == (hi = HashTableSearch(ct_hash, key, strlen(key)))) {
                         snprintf(key, sizeof(key), "%d:%d:%d", -1, bam_read, b);
                         if (NULL == (hi = HashTableSearch(ct_hash, key, strlen(key)))) {
-                            fprintf(stderr,"ERROR: no calibration table for tile=%d read=%d cycle=%d.\n", tile, bam_read, b);
+                            fprintf(stderr,"ERROR: no calibration table for tile=%d read=%d cycle=%d.\n", bam_tile, bam_read, b);
                             exit(EXIT_FAILURE);
                         }
                     }
