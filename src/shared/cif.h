@@ -3,6 +3,8 @@
 
 #include <stdio.h>
 
+#define MAX_CIF_CHUNK_BYTES 4194304
+
 typedef struct {
     long        lane;
     long        cycle;
