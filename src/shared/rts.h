@@ -3,7 +3,6 @@
 
 #include <stdio.h>
 
-#define N_LANES 8
 #define N_TILES 120
 #define N_READS 3
 #define N_COMMENTS 100

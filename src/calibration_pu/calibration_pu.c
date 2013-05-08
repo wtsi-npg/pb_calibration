@@ -68,12 +68,16 @@
  * CHECK_BASECALL
  *   this option checks the base call corresponds to channel with
  *   the maximum intensity
+ *
+ * ST_STRUCTURE
+ *   generate error stats
  */
 
 #define QC_FAIL
 #define PROPERLY_PAIRED
 //#define CALDATA
 //#define CHECK_BASECALL
+//#define ST_STRUCTURE
 
 #ifdef HAVE_CONFIG_H
 #include "pb_config.h"
@@ -115,17 +119,8 @@
 
 #include <version.h>
 
-#define MAX_CIF_CHUNK_BYTES 4194304
-
 /* if we split data by state, using a filter file rather than tile, use tile as a place holder for state */
 #define N_STATES 2
-
-#define BASE_ALIGN      (1<<0)
-#define BASE_MISMATCH   (1<<1)
-#define BASE_INSERTION  (1<<2)
-#define BASE_DELETION   (1<<3)
-#define BASE_SOFT_CLIP  (1<<4)
-#define BASE_KNOWN_SNP  (1<<5)
 
 #define ST_STATUS_GOOD  (1<<0)
 #define ST_STATUS_BAD   (1<<1)
@@ -141,7 +136,17 @@ typedef struct {
     float       *purity;
     long        *num_bases;
     long        *num_errors;
+#ifdef ST_STRUCTURE
+    long        *subst[NUM_SUBST];
+    long        *cntxt[NUM_CNTXT];
+    long        substH[NUM_SUBST];
+    long        substL[NUM_SUBST];
+    long        cntxtH[NUM_CNTXT];
+    long        cntxtL[NUM_CNTXT];
+#endif
     long        total_bases;
+    long        total_errors;
+    float       optimal_purity;
     float       quality;
     int         status;
 } SurvTable;
@@ -180,7 +185,7 @@ typedef struct {
 
 static void initialiseSurvTable(Settings *s, SurvTable *st, int tile, int read, int cycle)
 {
-    int i;
+    int i, j;
 
     st->tile  = tile;
     st->read  = read;
@@ -202,14 +207,33 @@ static void initialiseSurvTable(Settings *s, SurvTable *st, int tile, int read, 
         st->num_errors[i] = 0;
     }
 
+#ifdef ST_STRUCTURE
+    for (j=0;j<NUM_SUBST;j++) {
+        st->subst[j] = (long *)smalloc(st->nbins * sizeof(long));
+        for (i=0;i<st->nbins;i++) 
+            st->subst[j][i] = 0;
+        st->substH[j]=0;
+        st->substL[j]=0;
+    }
+
+    for (j=0;j<NUM_CNTXT;j++) {
+        st->cntxt[j] = (long *)smalloc(st->nbins * sizeof(long));
+        for (i=0;i<st->nbins;i++) 
+            st->cntxt[j][i] = 0;
+        st->cntxtH[j]=0;
+	st->cntxtL[j]=0;
+    }
+#endif
+
     st->total_bases = 0;
+    st->total_errors = 0;
 
     st->status = ST_STATUS_GOOD;
 }
 
 static void freeSurvTable(Settings *s, SurvTable **sts)
 {
-    int itile, read, cycle;
+    int itile, read, cycle, j;
     for(itile=0;itile<=N_TILES;itile++)
         for(read=0;read<N_READS;read++)
         {
@@ -221,30 +245,109 @@ static void freeSurvTable(Settings *s, SurvTable **sts)
                     free(st->purity);
                     free(st->num_bases);
                     free(st->num_errors);
-
+#ifdef ST_STRUCTURE
+                    for (j=0;j<NUM_SUBST;j++)
+                        free(st->subst[j]);
+                    for (j=0;j<NUM_CNTXT;j++)
+                        free(st->cntxt[j]);
+#endif                    
                     st->nbins = 0;
                 }
             }
         }
+
+#ifdef ST_STRUCTURE
+    for(read=0;read<N_READS;read++)
+    {
+        SurvTable *st = sts[(N_TILES+1)*N_READS+read];
+        if( NULL == st) continue;
+        if (st->nbins) {
+            free(st->purity);
+            free(st->num_bases);
+            free(st->num_errors);
+            for (j=0;j<NUM_SUBST;j++)
+                free(st->subst[j]);
+            for (j=0;j<NUM_CNTXT;j++)
+                free(st->cntxt[j]);
+            st->nbins = 0;
+        }
+    }
+#endif                    
+
 }
 
-static void completeSurvTable(Settings *s, SurvTable **sts)
+static int optimalPurityBin(SurvTable *st)
+{
+    int ipopt = 0;
+    float max_diff = 0.0;
+    long cum_bases = st->total_bases;
+    long cum_errors = st->total_errors;
+    int i;
+
+    /* find optimal purity which gives the best separation between bases and errors */
+    for(i=0;i<76;i++)
+    {
+        float frac_bases, frac_errors, diff_frac;
+        frac_bases = (float)cum_bases/(float)st->total_bases;
+        frac_errors = (float)cum_errors/(float)st->total_errors;
+        diff_frac = (frac_bases - frac_errors);
+        if (diff_frac > max_diff) {
+            max_diff = diff_frac;
+            ipopt = i;
+        }
+        cum_bases -= st->num_bases[i];
+        cum_errors -= st->num_errors[i];
+    }
+
+    return ipopt;
+}
+
+static int maximumQualityBin(SurvTable *st)
 {
     float ssc = 1.0;
-    int read, cycle, i;
+    int iqmax = 0, ipmax = 0;
+    long cum_bases = st->total_bases;
+    long cum_errors = st->total_errors;
+    int i;
+
+    /* find maximum (integer) quality */
+    for(i=0;i<76;i++)
+    {
+        float error_rate, quality;
+        int iq;
+        error_rate = (cum_errors + ssc)/(cum_bases + ssc);
+        quality = -10.0 * log10(error_rate);
+        iq = (int)(quality + 0.5);
+        if (iq > iqmax) {
+            iqmax = iq;
+            ipmax = i;
+        }
+        cum_bases -= st->num_bases[i];
+        cum_errors -= st->num_errors[i];
+    }
+
+    return ipmax;
+}
+
+static void completeSurvTable(Settings *s, SurvTable **sts, int no_cycles)
+{
+    float ssc = 1.0;
+    int read, cycle, i, j;
 
     for(read=0;read<N_READS;read++)
     {
         if( NULL == sts[read]) continue;
-        for(cycle=0;cycle<s->read_length[read];cycle++)
+        for(cycle=0;cycle<(no_cycles ? 1 : s->read_length[read]);cycle++)
         {
             SurvTable *st = sts[read] + cycle;
             long quality_bases = 0;
             long quality_errors = 0;
+            int ipopt;
 
             for(i=0;i<st->nbins;i++)
             {
                 st->total_bases += st->num_bases[i];
+                st->total_errors += st->num_errors[i];
 
                 // bases with purity=0.25 are called as N and explicitly get a quality of 0
                 if( st->purity[i] <= 0.25 )
@@ -255,6 +358,33 @@ static void completeSurvTable(Settings *s, SurvTable **sts)
             }
 
             st->quality = -10.0 * log10((quality_errors + ssc)/(quality_bases + ssc));
+
+            ipopt = optimalPurityBin(st);
+            st->optimal_purity = st->purity[ipopt];
+
+#ifdef ST_STRUCTURE
+            for(i=0;i<st->nbins;i++)
+            {
+                // exclude bases with purity=0.25 which are called as N
+                if( st->purity[i] <= 0.25 )
+                    continue;
+
+                if (st->purity[i] > st->optimal_purity)
+                {
+                    for(j=0;j<NUM_SUBST;j++)
+                        st->substH[j] += st->subst[j][i];
+                    for(j=0;j<NUM_CNTXT;j++)
+                        st->cntxtH[j] += st->cntxt[j][i];
+                }
+                else
+                {
+                    for(j=0;j<NUM_SUBST;j++)
+                        st->substL[j] += st->subst[j][i];
+                    for(j=0;j<NUM_CNTXT;j++)
+                        st->cntxtL[j] += st->cntxt[j][i];
+                }
+            }
+#endif                
         }
     }
 }
@@ -341,7 +471,7 @@ static void findBadTiles(Settings *s, int ntiles, SurvTable **sts)
 
 static void makeGlobalSurvTable(Settings *s, int ntiles, SurvTable **sts)
 {
-    int read, read_length, cycle, itile, i;
+    int read, read_length, cycle, itile, i, j;
 
     if (0 >= ntiles)
         return;
@@ -370,17 +500,163 @@ static void makeGlobalSurvTable(Settings *s, int ntiles, SurvTable **sts)
                         st->num_bases[i] += tile_st->num_bases[i];
                         st->num_errors[i] += tile_st->num_errors[i];
                     }
+#ifdef ST_STRUCTURE
+                    for(j=0;j<NUM_SUBST;j++)
+                        for(i=0;i<st->nbins;i++)
+                            st->subst[j][i] += tile_st->subst[j][i];
+                    for(j=0;j<NUM_CNTXT;j++)
+                        for(i=0;i<st->nbins;i++)
+                            st->cntxt[j][i] += tile_st->cntxt[j][i];
+#endif
+
                     tile_st->total_bases = 0;
+                    tile_st->total_errors = 0;
                 }
             }
         }
     }
 
-    completeSurvTable(s, &sts[ntiles*N_READS]);
+    completeSurvTable(s, &sts[ntiles*N_READS], 0);
 
+#ifdef ST_STRUCTURE
+    for(read=0;read<N_READS;read++)
+    {
+        read_length = s->read_length[read];
+        if (0 == read_length) continue;
+        sts[(N_TILES+1)*N_READS+read] = smalloc(sizeof(SurvTable));
+
+        SurvTable *st = sts[(N_TILES+1)*N_READS+read];
+
+        initialiseSurvTable(s, st, -1, read, -1);
+
+        for(cycle=0;cycle<read_length;cycle++)
+        {
+            SurvTable *cycle_st = sts[ntiles*N_READS+read] + cycle;
+            for(i=0;i<st->nbins;i++)
+            {
+                st->num_bases[i] += cycle_st->num_bases[i];
+                st->num_errors[i] += cycle_st->num_errors[i];
+            }
+            for(j=0;j<NUM_SUBST;j++)
+                for(i=0;i<st->nbins;i++)
+                    st->subst[j][i] += cycle_st->subst[j][i];
+            for(j=0;j<NUM_CNTXT;j++)
+                for(i=0;i<st->nbins;i++)
+                    st->cntxt[j][i] += cycle_st->cntxt[j][i];
+        }
+    }
+
+    completeSurvTable(s, &sts[(N_TILES+1)*N_READS], 1);
+#endif
+    
     return;
 }
     
+#ifdef ST_STRUCTURE
+static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
+{
+    FILE *fp;
+    int filename_sz;
+    char *filename;
+    int read, cycle, i, j;
+
+    filename_sz = (NULL == s->prefix ? 0 : strlen(s->prefix)) + 100;
+    filename = smalloc(filename_sz);
+
+    sprintf(filename, "%s_purity_cycle_error.txt", s->prefix);
+    fp = fopen(filename, "w");
+    if( NULL == fp )
+    {
+        fprintf(stderr, "ERROR: can't open error table file %s: %s\n",
+                filename, strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+
+    free(filename);
+
+    for(read=0;read<N_READS;read++)
+    {
+        if( NULL == sts[ntiles*N_READS+read]) continue;
+        for(cycle=0;cycle<s->read_length[read];cycle++)
+        {
+            SurvTable *st = sts[ntiles*N_READS+read] + cycle;
+
+            // skip st with no data
+            if( 0 == st->total_bases ) continue;
+
+            fprintf(fp, "#MSL\t%d\t%d", read, cycle);
+            for (j=0;j<NUM_SUBST;j++)
+            {
+                char *subst;
+                subst=word2str(j,LEN_SUBST);
+                if (subst[0]==subst[1]) continue;
+                fprintf(fp, "\t%s\t%ld", subst, st->substL[j]);
+            }
+            fprintf(fp, "\n");
+            fprintf(fp, "#MSH\t%d\t%d", read, cycle);
+            for (j=0;j<NUM_SUBST;j++)
+            {
+                char *subst;
+                subst=word2str(j,LEN_SUBST);
+                if (subst[0]==subst[1]) continue;
+                fprintf(fp, "\t%s\t%ld", subst, st->substH[j]);
+            }
+            fprintf(fp, "\n");
+        }
+    }
+
+    for(read=0;read<N_READS;read++)
+    {
+        SurvTable *st = sts[(N_TILES+1)*N_READS+read];
+        if( NULL == st) continue;
+
+        for (j=0;j<NUM_SUBST;j++)
+        {
+            char *subst;
+            subst=word2str(j,LEN_SUBST);
+            if (subst[0]==subst[1]) continue;
+            for(i=0;i<st->nbins;i++)
+                 fprintf(fp, "#SET\t%.2f\t%d\t%s\t%ld\n",
+                         st->purity[i], read, subst, st->subst[j][i]);
+        }
+
+        for (j=0;j<NUM_SUBST;j++)
+        {
+            char *subst;
+            subst=word2str(j,LEN_SUBST);
+            if (subst[0]==subst[1]) continue;
+            fprintf(fp, "#PRH\t%d\t%s\t%ld\n", read, subst, st->substH[j]);
+        }
+
+        for (j=0;j<NUM_SUBST;j++)
+        {
+            char *subst;
+            subst=word2str(j,LEN_SUBST);
+            if (subst[0]==subst[1]) continue;
+            fprintf(fp, "#PRL\t%d\t%s\t%ld\n", read, subst, st->substL[j]);
+        }
+
+        for (j=0;j<NUM_CNTXT;j++)
+        {
+            char *cntxt;
+            cntxt=word2str(j,LEN_CNTXT);
+            if (cntxt[1]==cntxt[2]) continue;
+            fprintf(fp, "#P1H\t%d\t%s\t%ld\n", read, cntxt, st->cntxtH[j]);
+        }
+
+        for (j=0;j<NUM_CNTXT;j++)
+        {
+            char *cntxt;
+            cntxt=word2str(j,LEN_CNTXT);
+            if (cntxt[1]==cntxt[2]) continue;
+            fprintf(fp, "#P1L\t%d\t%s\t%ld\n", read, cntxt, st->cntxtL[j]);
+        }
+    }
+    
+    fclose(fp);
+}
+#endif
+
 static void outputSurvTable(Settings *s, SurvTable **sts)
 {
     FILE *fp;
@@ -480,55 +756,16 @@ static void freeCalTable(Settings *s, CalTable **cts)
 
 static void optimisePurityBins(Settings *s, SurvTable *st, CalTable *ct)
 {
-    float ssc = 1.0;
-    long cum_bases[76];
-    long cum_errors[76];
     float purity_bins[76];
     int npurity_bins = 0;
 
     int i, j;
-    int iqmax = 0, ipmax = 0;
-    float max_diff = 0.0;
-    int ipopt = 0, ipbin;
+    int ipopt = 0, ipmax = 0;
+    int ipbin;
     float pinc;
 
-    /* calc cum_bases and cum_errors */
-    for(i=0;i<76;i++)
-    {
-        cum_bases[i] = 0;
-        cum_errors[i] = 0;
-        for(j=i;j<76;j++)
-        {
-            cum_bases[i]  += st->num_bases[j];
-            cum_errors[i] += st->num_errors[j];
-        }
-    }
-    /* find optimal purity by maximising diff_frac */
-    for(i=0;i<76;i++)
-    {
-        float frac_bases, frac_errors, diff_frac;
-        frac_bases = (float)cum_bases[i]/(float)cum_bases[0];
-        frac_errors = (float)cum_errors[i]/(float)cum_errors[0];
-        diff_frac = (frac_bases - frac_errors);
-        if (diff_frac > max_diff) {
-            max_diff = diff_frac;
-            ipopt = i;
-        }
-    }
-
-    /* find maximum (integer) quality */
-    for(i=0;i<76;i++)
-    {
-        float error_rate, quality;
-        int iq;
-        error_rate = (cum_errors[i] + ssc)/(cum_bases[i] + ssc);
-        quality = -10.0 * log10(error_rate);
-        iq = (int)(quality + 0.5);
-        if (iq > iqmax) {
-            iqmax = iq;
-            ipmax = i;
-        }
-    }
+    ipopt = optimalPurityBin(st);
+    ipmax = maximumQualityBin(st);
 
     /* if ipmax < ipopt reset ipmax to ipopt */
     if(ipmax < ipopt)
@@ -784,7 +1021,7 @@ static int updateSurvTable(Settings *s, SurvTable **sts, CifData *cif_data,
         float purity = -1.0;
         int ibin;
 
-        /* set cycle ct */
+        /* set cycle st */
         if (s->spatial_filter) {
             int state = (getFilterData(tile, read, b, iregion) & REGION_STATE_MISMATCH) ? 1 : 0;
             st = sts[state*N_READS+read] + b;
@@ -826,6 +1063,26 @@ static int updateSurvTable(Settings *s, SurvTable **sts, CifData *cif_data,
                 st->num_bases[ibin]++;
             if( read_mismatch[b] & BASE_MISMATCH )
                 st->num_errors[ibin]++;
+#ifdef ST_STRUCTURE
+            if( read_mismatch[b] & BASE_MISMATCH ){
+                char subst[LEN_SUBST+1];
+                char cntxt[LEN_CNTXT+1];
+                int word;
+
+                subst[0]=read_ref[b];
+                subst[1]=read_seq[b];
+                word=str2word(subst,LEN_SUBST);
+                if( word >= 0 )
+                    st->subst[word][ibin]++;
+
+                cntxt[0]=(b > 0 ? read_ref[b-1] : 'N');
+                cntxt[1]=read_ref[b];
+                cntxt[2]=read_seq[b];
+                word=str2word(cntxt,LEN_CNTXT);
+                if( word >= 0 )
+                    st->cntxt[word][ibin]++;
+            }
+#endif
         }
 
 #ifdef CALDATA
@@ -918,16 +1175,20 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
     int bam_read_mismatch[bam_read_buff_size];
     FILE *fp_caldata = NULL;
 
-    bam1_t *bam = bam_init1();
-
     int itile, read;
+
+    bam1_t *bam = bam_init1();
 
     checked_chdir(s->intensity_dir);
 
     for(itile=0;itile<=N_TILES;itile++)
         for(read=0;read<N_READS;read++)
             sts[itile*N_READS+read] = NULL;
-
+#ifdef ST_STRUCTURE
+    for(read=0;read<N_READS;read++)
+        sts[(N_TILES+1)*N_READS+read] = NULL;
+#endif
+    
     itile = -1;
 
     /* loop over reads in the bam file */
@@ -1064,10 +1325,10 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
     if (s->spatial_filter) {
         int state;
         for(state=0;state<N_STATES;state++)
-            completeSurvTable(s, &sts[state*N_READS]);
+            completeSurvTable(s, &sts[state*N_READS], 0);
     }else{
         for(itile=0;itile<ntiles_bam;itile++)
-            completeSurvTable(s, &sts[itile*N_READS]);
+            completeSurvTable(s, &sts[itile*N_READS], 0);
     }
     
 
@@ -1082,7 +1343,6 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
 
     return nst;
 }
-
 
 static
 void usage(int code) {
@@ -1148,7 +1408,6 @@ check_arg(const int i,
 }
 
 
-
 int main(int argc, char **argv) {
 
     Settings settings;
@@ -1160,7 +1419,11 @@ int main(int argc, char **argv) {
     int ntiles = 0;
     int nreads = 0;
     int nst = 0;
+#ifdef ST_STRUCTURE
+    SurvTable *sts[(N_TILES+2)*N_READS];
+#else
     SurvTable *sts[(N_TILES+1)*N_READS];
+#endif
     int nct = 0;
     CalTable *cts[(N_TILES+1)*N_READS];
 
@@ -1363,6 +1626,10 @@ int main(int argc, char **argv) {
 
     outputSurvTable(&settings, sts);
 
+#ifdef ST_STRUCTURE
+    outputErrorTable(&settings, ntiles, sts);
+#endif    
+
     nct = makeCalTable(&settings, sts, cts);
     if (0 == nct) {
         fprintf(stderr,"ERROR: failed to make calibration table\n");
@@ -1382,4 +1649,3 @@ int main(int argc, char **argv) {
 
     return EXIT_SUCCESS;
 
-}
