@@ -58,8 +58,6 @@
 #include <die.h>
 #include <rts.h>
 
-#define MAX_CIF_CHUNK_BYTES 4194304
-
 #ifdef HAVE_PREAD
 # warning "trying to use system pread"
 # define pread_bytes pread
