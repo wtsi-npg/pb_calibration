@@ -185,7 +185,7 @@ typedef struct {
 
 static void initialiseSurvTable(Settings *s, SurvTable *st, int tile, int read, int cycle)
 {
-    int i, j;
+    int i;
 
     st->tile  = tile;
     st->read  = read;
@@ -206,8 +206,8 @@ static void initialiseSurvTable(Settings *s, SurvTable *st, int tile, int read, 
         st->num_bases[i] = 0;
         st->num_errors[i] = 0;
     }
-
 #ifdef ST_STRUCTURE
+    int j;
     for (j=0;j<NUM_SUBST;j++) {
         st->subst[j] = (long *)smalloc(st->nbins * sizeof(long));
         for (i=0;i<st->nbins;i++) 
@@ -215,7 +215,6 @@ static void initialiseSurvTable(Settings *s, SurvTable *st, int tile, int read, 
         st->substH[j]=0;
         st->substL[j]=0;
     }
-
     for (j=0;j<NUM_CNTXT;j++) {
         st->cntxt[j] = (long *)smalloc(st->nbins * sizeof(long));
         for (i=0;i<st->nbins;i++) 
@@ -233,7 +232,7 @@ static void initialiseSurvTable(Settings *s, SurvTable *st, int tile, int read, 
 
 static void freeSurvTable(Settings *s, SurvTable **sts)
 {
-    int itile, read, cycle, j;
+    int itile, read, cycle;
     for(itile=0;itile<=N_TILES;itile++)
         for(read=0;read<N_READS;read++)
         {
@@ -246,17 +245,20 @@ static void freeSurvTable(Settings *s, SurvTable **sts)
                     free(st->num_bases);
                     free(st->num_errors);
 #ifdef ST_STRUCTURE
+                    int j;
                     for (j=0;j<NUM_SUBST;j++)
                         free(st->subst[j]);
                     for (j=0;j<NUM_CNTXT;j++)
                         free(st->cntxt[j]);
 #endif                    
+
                     st->nbins = 0;
                 }
             }
         }
 
 #ifdef ST_STRUCTURE
+    int j;
     for(read=0;read<N_READS;read++)
     {
         SurvTable *st = sts[(N_TILES+1)*N_READS+read];
@@ -332,7 +334,7 @@ static int maximumQualityBin(SurvTable *st)
 static void completeSurvTable(Settings *s, SurvTable **sts, int no_cycles)
 {
     float ssc = 1.0;
-    int read, cycle, i, j;
+    int read, cycle, i;
 
     for(read=0;read<N_READS;read++)
     {
@@ -363,12 +365,9 @@ static void completeSurvTable(Settings *s, SurvTable **sts, int no_cycles)
             st->optimal_purity = st->purity[ipopt];
 
 #ifdef ST_STRUCTURE
+            int j;
             for(i=0;i<st->nbins;i++)
             {
-                // exclude bases with purity=0.25 which are called as N
-                if( st->purity[i] <= 0.25 )
-                    continue;
-
                 if (st->purity[i] > st->optimal_purity)
                 {
                     for(j=0;j<NUM_SUBST;j++)
@@ -471,7 +470,7 @@ static void findBadTiles(Settings *s, int ntiles, SurvTable **sts)
 
 static void makeGlobalSurvTable(Settings *s, int ntiles, SurvTable **sts)
 {
-    int read, read_length, cycle, itile, i, j;
+    int read, read_length, cycle, itile, i;
 
     if (0 >= ntiles)
         return;
@@ -501,6 +500,7 @@ static void makeGlobalSurvTable(Settings *s, int ntiles, SurvTable **sts)
                         st->num_errors[i] += tile_st->num_errors[i];
                     }
 #ifdef ST_STRUCTURE
+                    int j;
                     for(j=0;j<NUM_SUBST;j++)
                         for(i=0;i<st->nbins;i++)
                             st->subst[j][i] += tile_st->subst[j][i];
