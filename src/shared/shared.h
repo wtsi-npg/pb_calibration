@@ -17,3 +17,4 @@ char *get_real_path_name(const char*);
 char *get_command_line(int argc, char **argv);
 int str2word(char *seq, int NH);
 char *word2str(int word, int NH);
+int tile_sort(const void *t1, const void *t2);
