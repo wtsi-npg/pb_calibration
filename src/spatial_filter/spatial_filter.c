@@ -1,4 +1,4 @@
-/*  -*- mode: c; indent-tabs-mode: nil; c-basic-offset: 4; tab-width: 8; -*- */
+//*  -*- mode: c; indent-tabs-mode: nil; c-basic-offset: 4; tab-width: 8; -*- */
 
 /* TO-DO:
  *
@@ -54,14 +54,10 @@
  *
  * PROPERLY_PAIRED
  *   only use properly paired reads when building calibration table
- *
- * BINARY_FILTER_FILE
- *   write filter file in binary format
  */
 
 #define QC_FAIL
 #define PROPERLY_PAIRED
-#define BINARY_FILTER_FILE
 
 #ifdef HAVE_CONFIG_H
 #include "pb_config.h"
@@ -119,144 +115,44 @@
 typedef struct {
 	char *cmdline;
 	char *filter;
-	char *intensity_dir;
 	char *snp_file;
 	char *in_bam_file;
 	HashTable *snp_hash;
 	HashTable *tile_hash;
+    int *tileArray;
 	char *working_dir;
 	char *output;
-	int lane;
 	int read_length[3];
 	int dump;
 	int calculate;
 	int apply;
 	int qcfail;
-	int tileViz;
 	int quiet;
 	int region_size;
 	int nregions_x;
 	int nregions_y;
 	int nregions;
 	int compress;
-	int width;
-	int height;
 	int region_min_count;
 	float region_mismatch_threshold;
 	float region_insertion_threshold;
 	float region_deletion_threshold;
 } Settings;
 
-static void setRegions(Settings * s)
+void freeRTS(Settings *s, HashTable ***rts_hash)
 {
-	// if an intensity directory is given read the ImageSize.dat file to get the tile size
-	if (s->intensity_dir) {
-                char *file = NULL;
-                size_t file_sz = strlen(s->intensity_dir) + 30;
-                int fd = -1;
-                ssize_t res;
-                uint32_t width, height;
-		file = smalloc(file_sz);
-		snprintf(file, file_sz, "%s/../ImageSize.dat", s->intensity_dir);
-		fd = open(file, O_RDONLY);
-		if (fd < 0) die("Couldn't open %s : %s\n", file, strerror(errno));
-		res = read(fd, &width, 4);
-		if (4 != res) die("Error reading %s\n", file);
-		res = read(fd, &height, 4);
-		if (4 != res) die("Error reading %s\n", file);
-		s->width = width;
-		s->height = height;
-   	        if (!s->quiet) display("Read tile width=%u height=%u from file %s\n", s->width, s->height, file);
-		close(fd);
-	        free(file);
-	}
-
-	s->nregions_x = 1 + (int)(s->width / s->region_size);
-	s->nregions_y = 1 + (int)(s->height / s->region_size);
-
-	s->nregions = s->nregions_x * s->nregions_y;
-
-	if (!s->quiet) display("nregions_x=%d nregions_y=%d nregions=%d\n", s->nregions_x, s->nregions_y, s->nregions);
-
-	return;
-}
-
-//
-// generate tileviz like summary plots for read number tileViz
-//
-static void displayTileViz(Settings *s, int ntiles, int tile)
-{
-	HashItem *hashItem;
-	int itile;
-	int read = s->tileViz;
-	int *coverage  = smalloc(s->nregions * sizeof(int));
-	int *mismatch  = smalloc(s->nregions * sizeof(int));
-	int *insertion = smalloc(s->nregions * sizeof(int));
-	int *deletion  = smalloc(s->nregions * sizeof(int));
-        int cycle, iregion, i, j;
-	hashItem = HashTableSearch(s->tile_hash, (char *)&tile, sizeof(tile));
-	if (!hashItem) die("Can't find tile %d in tile_hash\n", tile);
-	itile = hashItem->data.i;
- 
-        for (iregion = 0; iregion < s->nregions; iregion++) {
-            coverage[iregion] = 0;
-            mismatch[iregion]  = 0;
-            insertion[iregion] = 0;
-            deletion[iregion]  = 0;
-        }
-
-        for (cycle = 0; cycle < s->read_length[read]; cycle++) {
-                for (iregion = 0; iregion < s->nregions; iregion++) {
-                        RegionTable *rt = getRTS(itile,iregion,read,cycle);
-                        int n = rt->align + rt->insertion + rt->deletion + rt->soft_clip + rt->known_snp;
-                        // correct for sparse bins by assuming ALL bins have atleast REGION_MIN_COUNT clusters
- 	                n = max(n, s->region_min_count);
-                        // coverage should be the same for all cycles
-                        coverage[iregion] = n;
-                        // for all other values take the maximum over all cycles
-                        mismatch[iregion]  = max(mismatch[iregion],  rt->mismatch);
-                        insertion[iregion] = max(insertion[iregion], rt->insertion);
-                        deletion[iregion]  = max(deletion[iregion],  rt->deletion);
-    	        }
-	}
-
-	display ("tile=%-4d coverage       mismatch       insertion      deletion\n", tile);
-	for (i = 0; i < s->nregions_y; i++) {
-		display("          ");
-                // truncate coverage to 15 so it displays as a single hex value
-		for (j = 0; j < s->nregions_x; j++) {
-			iregion = j * s->nregions_y + i;
-			int v = min(coverage[iregion], 15);
-			display("%1x", v);
-		}
-		display("    ");
-		// convert all other values to a percentage and bin 0(0%), 1(10%), .. 10(100%)
-		// correct for sparse bins by assuming ALL bins have atleast REGION_MIN_COUNT clusters
-		for (j = 0; j < s->nregions_x; j++) {
-			iregion = j * s->nregions_y + i;
-			int v = (int)(10.0 * mismatch[iregion] / coverage[iregion]);
-			display("%1x", v);
-		}
-		display("    ");
-		for (j = 0; j < s->nregions_x; j++) {
-			iregion = j * s->nregions_y + i;
-			int v = (int)(10.0 * insertion[iregion] / coverage[iregion]);
-			display("%1x", v);
-		}
-		display("    ");
-		for (j = 0; j < s->nregions_x; j++) {
-			iregion = j * s->nregions_y + i;
-			int v = (int)(10.0 * deletion[iregion] / coverage[iregion]);
-			display("%1x", v);
-		}
-		display("\n");
-	}
-	display("\n");
-
-        free(coverage);
-        free(mismatch);
-        free(insertion);
-        free(deletion);
+        int itile, read, cycle;
+        for(itile=0;itile<N_TILES;itile++)
+            for(read=0;read<N_READS;read++)
+            {
+                if( NULL == rts_hash[itile*N_READS+read]) continue;
+                for(cycle=0;cycle<s->read_length[read];cycle++)
+                {
+                    HashTable *rt_hash = rts_hash[itile*N_READS+read][cycle];
+                    HashTableDestroy(rt_hash, 1);
+                }
+                free(rts_hash[itile*N_READS+read]);
+            }
 }
 
 /*
@@ -264,80 +160,87 @@ static void displayTileViz(Settings *s, int ntiles, int tile)
  * filter is typically 2.
 */
 
-static void findBadRegions(Settings *s, int ntiles)
+static void findBadRegions(Settings *s, int ntiles, HashTable ***rts_hash)
 {
-	HashItem *hashItem;
+	int i;
+    HashItem *tileItem, *hashItem;
 
 	if (0 >= ntiles)
 		return;
 
-	HashIter *iter = HashTableIterCreate();
-	while ((hashItem = HashTableIterNext(s->tile_hash, iter))) {
-		int tile = *(int*)(hashItem->key);
-		int itile = hashItem->data.i;
-
-		if (s->tileViz) displayTileViz(s,ntiles,tile);
+    for (i=0; i<ntiles; i++) {
+        int tile = s->tileArray[i];
+        tileItem = HashTableSearch(s->tile_hash, (char *)&tile, sizeof(tile));
+        if (NULL == tileItem) {
+            fprintf(stderr,"ERROR: unknown tile %d\n", s->tileArray[i]);
+            exit(EXIT_FAILURE);
+        }
+		int itile = tileItem->data.i;
 
 		int read;
 		for (read = 0; read < N_READS; read++) {
 			int cycle;
 			for (cycle = 0; cycle < s->read_length[read]; cycle++) {
 				// set the state for each region
-				int iregion;
-				for (iregion = 0; iregion < s->nregions; iregion++) {
-					RegionTable *rt = getRTS(itile,iregion,read,cycle);
-					rt->state = 0;
+   	            HashTable *rt_hash = rts_hash[itile*N_READS+read][cycle];
+  	            HashIter *iter = HashTableIterCreate();
+  	            while ((hashItem = HashTableIterNext(rt_hash, iter))) {
+                    RegionTable *rt = (RegionTable *)hashItem->data.p;
+                    rt->state = 0;
 
-   					// coverage
-					int n = rt->align + rt->insertion + rt->deletion + rt->soft_clip + rt->known_snp;
+                    // coverage
+                    int n = rt->align + rt->insertion + rt->deletion + rt->soft_clip + rt->known_snp;
 
-					// coverage - mark spare bins
-					if (n < s->region_min_count) rt->state |= REGION_STATE_COVERAGE;
+                    // coverage - mark spare bins
+                    if (n < s->region_min_count) rt->state |= REGION_STATE_COVERAGE;
 
-					// correct for sparse bins by assuming ALL bins have atleast REGION_MIN_COUNT clusters
-					n = max(n, s->region_min_count);
+                    // correct for sparse bins by assuming ALL bins have atleast REGION_MIN_COUNT clusters
+                    n = max(n, s->region_min_count);
 
-					// mismatch - mark bins with maximum mismatch rate > threshold
-					if (((float)rt->mismatch  / (float)n) >= s->region_mismatch_threshold)  rt->state |= REGION_STATE_MISMATCH;
-					// insertion - mark bins with maximum insertion rate > threshold
-					if (((float)rt->insertion / (float)n) >= s->region_insertion_threshold) rt->state |= REGION_STATE_INSERTION;
-					// deletion - mark bins with maximum deletion rate > threshold
-					if (((float)rt->deletion  / (float)n) >= s->region_deletion_threshold)  rt->state |= REGION_STATE_DELETION;
-					//if (rt->state) display("%d:%d:%d:%d:%d:%d\t%02x\n", s->lane, tileArray[itile], iregion, read, cycle, n, rt->state);
-				}
+                    // mismatch - mark bins with maximum mismatch rate > threshold
+                    if (((float)rt->mismatch  / (float)n) >= s->region_mismatch_threshold)  rt->state |= REGION_STATE_MISMATCH;
+                    // insertion - mark bins with maximum insertion rate > threshold
+                    if (((float)rt->insertion / (float)n) >= s->region_insertion_threshold) rt->state |= REGION_STATE_INSERTION;
+                    // deletion - mark bins with maximum deletion rate > threshold
+                    if (((float)rt->deletion  / (float)n) >= s->region_deletion_threshold)  rt->state |= REGION_STATE_DELETION;
+                }
 				// ignoring low coverage, if all regions with a non-zero state have the same state and the
-                                // fraction of regions with this state exceeds a theshold set the state for the whole tile
+                // fraction of regions with this state exceeds a theshold set the state for the whole tile
 				int tile_state = -1, nregions = 0;
-				for (iregion = 0; iregion < s->nregions; iregion++) {
-					RegionTable *rt = getRTS(itile,iregion,read,cycle);
-					int state = rt->state & ~REGION_STATE_COVERAGE;
-					if (!state) continue;
-					if (tile_state == -1) tile_state = state;
-					if (state != tile_state) break;
-					nregions++;
-				}
-				if (iregion == s->nregions && (((float)nregions/(float)s->nregions) >= TILE_REGION_THRESHOLD))
-                                        for (iregion = 0; iregion < s->nregions; iregion++) {
-                                                RegionTable *rt = getRTS(itile,iregion,read,cycle);
-                                                rt->state = tile_state | (rt->state & REGION_STATE_COVERAGE);
-                                        }
-			        if (!s->quiet) {
-                                        int mismatch = 0, insertion = 0, deletion = 0, soft_clip = 0;
-                                        long quality_bases = 0, quality_errors = 0;
-                                        for (iregion = 0; iregion < s->nregions; iregion++) {
-                                                RegionTable *rt = getRTS(itile,iregion,read,cycle);
-                                                if (rt->state & REGION_STATE_MISMATCH)  mismatch++;
-                                                if (rt->state & REGION_STATE_INSERTION) insertion++;
-                                                if (rt->state & REGION_STATE_DELETION)  deletion++;
-                                                if (rt->state & REGION_STATE_SOFT_CLIP) soft_clip++;
-                                                quality_bases  += rt->align;
-                                                quality_errors += rt->mismatch;
-                                        }
-                                        float ssc = 1.0;
-                                        float quality = -10.0 * log10((quality_errors + ssc)/(quality_bases + ssc));
-                                        display("tile=%-4d read=%1d cycle=%-3d quality=%.2f mismatch=%-4d insertion=%-4d deletion=%-4d soft_clip=%-4d\n",
-                                                tile, read, cycle, quality, mismatch, insertion, deletion, soft_clip);
-                                }
+                HashTableIterReset(iter);
+  	            while ((hashItem = HashTableIterNext(rt_hash, iter))) {
+                    RegionTable *rt = (RegionTable *)hashItem->data.p;
+                    int state = rt->state & ~REGION_STATE_COVERAGE;
+                    if (!state) continue;
+                    if (tile_state == -1) tile_state = state;
+                    if (state != tile_state) break;
+                    nregions++;
+                }
+				if (NULL == hashItem && (((float)nregions/(float)s->nregions) >= TILE_REGION_THRESHOLD)) {
+                    HashTableIterReset(iter);
+  	                while ((hashItem = HashTableIterNext(rt_hash, iter))) {
+                        RegionTable *rt = (RegionTable *)hashItem->data.p;
+                        rt->state = tile_state | (rt->state & REGION_STATE_COVERAGE);
+                    }
+                }
+                if (!s->quiet) {
+                    int mismatch = 0, insertion = 0, deletion = 0, soft_clip = 0;
+                    long quality_bases = 0, quality_errors = 0;
+                    HashTableIterReset(iter);
+  	                while ((hashItem = HashTableIterNext(rt_hash, iter))) {
+                        RegionTable *rt = (RegionTable *)hashItem->data.p;
+                        if (rt->state & REGION_STATE_MISMATCH)  mismatch++;
+                        if (rt->state & REGION_STATE_INSERTION) insertion++;
+                        if (rt->state & REGION_STATE_DELETION)  deletion++;
+                        if (rt->state & REGION_STATE_SOFT_CLIP) soft_clip++;
+                        quality_bases  += rt->align;
+                        quality_errors += rt->mismatch;
+                    }
+                    float ssc = 1.0;
+                    float quality = -10.0 * log10((quality_errors + ssc)/(quality_bases + ssc));
+                    display("tile=%-4d read=%1d cycle=%-3d quality=%.2f mismatch=%-4d insertion=%-4d deletion=%-4d soft_clip=%-4d\n",
+                            tile, read, cycle, quality, mismatch, insertion, deletion, soft_clip);
+                }
 			}
 		}
 	}
@@ -345,28 +248,20 @@ static void findBadRegions(Settings *s, int ntiles)
 	return;
 }
 
-void printFilter(Settings *s, int ntiles, FILE *fp) 
+void printFilter(Settings *s, int ntiles, HashTable ***rts_hash) 
 {
-	int read, cycle, iregion;
+	FILE *fp;
+	int i, read, cycle;
 	Header hdr;
-	HashItem *hashItem;
-	int *tileArray;
 
-	// create the tile array from the tile hash
-	tileArray = smalloc(ntiles * sizeof(int));
-	HashIter *tileIter = HashTableIterCreate();
-	int i = 0;
-	while ((hashItem = HashTableIterNext(s->tile_hash, tileIter))) {
-		if (i>=ntiles) die("Too many tiles!\n");
-		tileArray[i++] = *(int*)hashItem->key;
-	}
+    fp = fopen(s->filter, "w+");
+	if (!fp) die("Can't open filter file %s: %s\n", s->filter, strerror(errno));
 
-#ifdef BINARY_FILTER_FILE
 	hdr.region_magic = strdup(REGION_MAGIC);
 	hdr.coord_shift = COORD_SHIFT; 
 	hdr.coord_factor = COORD_FACTOR;
 	hdr.ntiles = ntiles;
-	hdr.tileArray = tileArray;
+	hdr.tileArray = s->tileArray;
 	hdr.nreads = N_READS;
 	hdr.region_size = s->region_size;
 	hdr.nregions = s->nregions;
@@ -377,28 +272,41 @@ void printFilter(Settings *s, int ntiles, FILE *fp)
 	hdr.cmdLine = strdup(s->cmdline);
 	hdr.ncomments = 0;
 	writeHeader(fp,&hdr);
-#endif
         
-	HashIter *iter = HashTableIterCreate();
-	while ((hashItem = HashTableIterNext(s->tile_hash, iter))) {
-#ifndef BINARY_FILTER_FILE
-		int tile = *(int*)(hashItem->key);
-#endif
-		int itile = hashItem->data.i;
+    for (i=0; i<ntiles; i++) {
+        int tile = s->tileArray[i];
+        HashItem *tileItem = HashTableSearch(s->tile_hash, (char *)&tile, sizeof(tile));
+        if (NULL == tileItem) {
+            fprintf(stderr,"ERROR: unknown tile %d\n", s->tileArray[i]);
+            exit(EXIT_FAILURE);
+        }
+		int itile = tileItem->data.i;
 		for (read = 0; read < N_READS; read++) {
 			for (cycle = 0; cycle < s->read_length[read]; cycle++) {
-				for (iregion = 0; iregion < s->nregions; iregion++) {
-					RegionTable *rt = getRTS(itile,iregion,read,cycle);
-                                        int state = rt->state;
-#ifdef BINARY_FILTER_FILE
-					fputc(state, fp);
-#else
-					if (state) fprintf(fp, "%d:%d:%d:%d:%d:%02x\n", s->lane, tile, iregion, read, cycle, state);
-#endif
+                HashTable *rt_hash = rts_hash[itile*N_READS+read][cycle];
+                int ix, iy;
+                for (ix = 0; ix < s->nregions_x; ix++) {
+                    for (iy = 0; iy < s->nregions_y; iy++) {
+                        char key[100];
+                        char *cp;
+                        HashItem *hi;
+                        int state = 0;
+                        cp = append_int(key, ix);
+                        cp = append_char(cp, ':');
+                        cp = append_int(cp, iy);
+                        *cp = 0;
+                        if( NULL != (hi = HashTableSearch(rt_hash, key, strlen(key))) ){
+                            RegionTable *rt = (RegionTable *)hi->data.p;
+                            state = rt->state;
+                        }
+   					    fputc(state, fp);
+     			    }
 				}
 			}
 		}
 	}
+
+	fclose(fp);
 }
 
 /*
@@ -472,17 +380,45 @@ int dump_bam_file(Settings *s, samfile_t *fp_bam, size_t *nreads)
 }
 
 
-
-static int updateRegionTable(Settings *s, int itile, int read, int x, int y, int *read_mismatch)
+static int updateRegionTable(Settings *s, HashTable ***rts_hash, int read, int x, int y, int *read_mismatch)
 {
-
-        int iregion = xy2region(x, y, s->region_size, s->nregions_x, s->nregions_y);
+    int ix = x2region(x, s->region_size);
+    int iy = x2region(y, s->region_size);
 	int cycle;
 
-        /* update region table */
+    /* update region table */
 	for (cycle = 0; cycle < s->read_length[read]; cycle++) {
-                RegionTable *rt = getRTS(itile,iregion,read,cycle);
+        HashTable *rt_hash = rts_hash[read][cycle];
+        char key[100];
+        char *cp;
+        HashItem *hi;
+        HashData hd;
+        RegionTable *rt;
 
+        cp = append_int(key, ix);
+        cp = append_char(cp, ':');
+        cp = append_int(cp, iy);
+        *cp = 0;
+        if( NULL == (hi = HashTableSearch(rt_hash, key, strlen(key))) ){
+            hd.p = smalloc(sizeof(RegionTable));
+            if( NULL == HashTableAdd(rt_hash, key, strlen(key), hd, NULL) ) {
+                fprintf(stderr, "ERROR: building rts hash table\n");
+                exit(EXIT_FAILURE);
+            }
+            if( ix >= s->nregions_x ) s->nregions_x = ix + 1;
+            if( iy >= s->nregions_y ) s->nregions_y = iy + 1;
+            rt = (RegionTable *)hd.p;
+            rt->align     = 0;
+            rt->mismatch  = 0;
+            rt->insertion = 0;
+            rt->deletion  = 0;
+            rt->soft_clip = 0;
+            rt->known_snp = 0;
+            rt->state     = 0;            
+        }else{
+            rt = (RegionTable *)hi->data.p;
+        }
+        
 		if (read_mismatch[cycle] & BASE_INSERTION) rt->insertion++;
 		if (read_mismatch[cycle] & BASE_DELETION) rt->deletion++;
 		if (read_mismatch[cycle] & BASE_SOFT_CLIP) rt->soft_clip++;
@@ -506,7 +442,7 @@ static int updateRegionTable(Settings *s, int itile, int read, int x, int y, int
  * Returns: 0 written for success
  *	   -1 for failure
  */
-void makeRegionTable(Settings *s, samfile_t *fp_bam, int *ntiles, size_t * nreads)
+void makeRegionTable(Settings *s, samfile_t *fp_bam, HashTable ***rts_hash, int *ntiles, size_t * nreads)
 {
 	HashData hd;
 	int lane = -1;
@@ -520,12 +456,18 @@ void makeRegionTable(Settings *s, samfile_t *fp_bam, int *ntiles, size_t * nread
 	int bam_read_qual[bam_read_buff_size];
 	int bam_read_mismatch[bam_read_buff_size];
 
-	s->tile_hash = HashTableCreate(N_TILES, HASH_DYNAMIC_SIZE | HASH_FUNC_JENKINS3);
-	if (!s->tile_hash) die("Failed to create tile_hash\n");
+    int itile, read;
 
 	bam1_t *bam = bam_init1();
 
-	int itile = -1;
+	s->tile_hash = HashTableCreate(N_TILES, HASH_DYNAMIC_SIZE | HASH_FUNC_JENKINS3);
+	if (!s->tile_hash) die("Failed to create tile_hash\n");
+
+    for(itile=0;itile<N_TILES;itile++)
+        for(read=0;read<N_READS;read++)
+            rts_hash[itile*N_READS+read] = NULL;
+
+    itile = -1;
 
 	/* loop over reads in the bam file */
 	while (1) {
@@ -549,7 +491,6 @@ void makeRegionTable(Settings *s, samfile_t *fp_bam, int *ntiles, size_t * nread
 		read_length = strlen(bam_read_seq);
 		if (0 == s->read_length[bam_read]) {
 			s->read_length[bam_read] = read_length;
-   	                initRTS(N_TILES, s->nregions, bam_read, read_length);
 		}
 
 		if (s->read_length[bam_read] != read_length) {
@@ -579,7 +520,15 @@ void makeRegionTable(Settings *s, samfile_t *fp_bam, int *ntiles, size_t * nread
 			itile = hd.i;
 		}
 
-                if (0 != updateRegionTable(s, itile, bam_read, bam_x, bam_y, bam_read_mismatch)) {
+        if (NULL == rts_hash[itile*N_READS+bam_read]) {
+            int cycle;
+            rts_hash[itile*N_READS+bam_read] = smalloc(read_length * sizeof(HashTable *));
+            for(cycle=0;cycle<read_length;cycle++) {
+                rts_hash[itile*N_READS+bam_read][cycle] = HashTableCreate(0, HASH_DYNAMIC_SIZE | HASH_FUNC_JENKINS3);
+            }
+        }
+
+        if (0 != updateRegionTable(s, &rts_hash[itile*N_READS], bam_read, bam_x, bam_y, bam_read_mismatch)) {
 			die("ERROR: updating quality values for tile %i.\n", tile);
 		}
 		nreads_bam++;
@@ -587,9 +536,22 @@ void makeRegionTable(Settings *s, samfile_t *fp_bam, int *ntiles, size_t * nread
 
 	bam_destroy1(bam);
 
-	*ntiles = ntiles_bam;
+	s->nregions = s->nregions_x * s->nregions_y;
+	if (!s->quiet) display("nregions_x=%d nregions_y=%d nregions=%d\n", s->nregions_x, s->nregions_y, s->nregions);
+
+	// create a sorted tile array from the tile hash
+	s->tileArray = smalloc(ntiles_bam * sizeof(int));
+	HashIter *iter = HashTableIterCreate();
+	HashItem *tileItem;
+    int i = 0;
+    while ((tileItem = HashTableIterNext(s->tile_hash, iter))) {
+		if (itile>=ntiles_bam) die("Too many tiles!\n");
+		s->tileArray[i++] = *(int*)tileItem->key;
+	}
+    qsort(s->tileArray, ntiles_bam, sizeof(int), tile_sort);
+
+    *ntiles = ntiles_bam;
 	*nreads = nreads_bam;
-	s->lane = lane;
 }
 
 /*
@@ -661,7 +623,7 @@ int filter_bam(Settings * s, samfile_t * fp_in_bam, samfile_t * fp_out_bam,
 		if (0 > samwrite(fp_out_bam, bam)) die("Error: writing bam file\n");
 	}
 
-	*nreads = nreads_bam;
+    *nreads = nreads_bam;
 	*nfiltered = nfiltered_bam;
 
 	bam_destroy1(bam);
@@ -700,18 +662,9 @@ static void usage(int code)
 	fprintf(usagefp, "                  no default: must be supplied\n");
 	fprintf(usagefp, "\n");
 	fprintf(usagefp, "    calculate filter:\n");
-	fprintf(usagefp, "      -width width\n");
-	fprintf(usagefp, "                 Tile width\n");
-	fprintf(usagefp, "      -height height\n");
-	fprintf(usagefp, "                 Tile height\n");
-        fprintf(usagefp, "      -i --intensity-dir dir\n");
-        fprintf(usagefp, "                 (Raw) Intensity directory (to find ../ImageSize.dat)\n");
-        fprintf(usagefp, "                 required unless tile width and height are supplied\n");
 	fprintf(usagefp, "      -s --snp_file file\n");
 	fprintf(usagefp, "                 set of snps to be removed\n");
 	fprintf(usagefp, "                 file in Reference Ordered Data (ROD) format\n");
-	fprintf(usagefp, "      -t --tileviz read\n");
-	fprintf(usagefp, "                 generate tileviz like summary plots for read number\n");
 	fprintf(usagefp, "      --region_size\n");
 	fprintf(usagefp, "                 default %d\n", REGION_SIZE);
 	fprintf(usagefp, "      --region_min_count\n");
@@ -746,22 +699,20 @@ void calculateFilter(Settings *s)
 	samfile_t *fp_input_bam;
 	int ntiles = 0;
 	size_t nreads = 0;
-	FILE *fp_filter;
+
+	HashTable **rts_hash[N_TILES*N_READS];
+
+    if( NULL == s->filter) {
+        display("Writing filter to stdout\n");
+        s->filter = "/dev/stdout";
+    }
 
 	fp_input_bam = samopen(s->in_bam_file, "rb", 0);
 	if (NULL == fp_input_bam) {
 		die("ERROR: can't open bam file %s: %s\n", s->in_bam_file, strerror(errno));
 	}
 
-        if( NULL == s->filter) {
-                display("Writing filter to stdout\n");
-                s->filter = "/dev/stdout";
-        }
-
-        fp_filter = fopen(s->filter, "w+");
-	if (!fp_filter) die("Can't open filter file %s: %s\n", s->filter, strerror(errno));
-
-	makeRegionTable(s, fp_input_bam, &ntiles, &nreads);
+	makeRegionTable(s, fp_input_bam, rts_hash, &ntiles, &nreads);
 
 	/* close the bam file */
 	samclose(fp_input_bam);
@@ -783,12 +734,16 @@ void calculateFilter(Settings *s)
 	/* back to where we belong */
 	checked_chdir(s->working_dir);
 
-	findBadRegions(s, ntiles);
+	findBadRegions(s, ntiles, rts_hash);
 
-	printFilter(s, ntiles, fp_filter);
+    if( NULL == s->filter) {
+        display("Writing filter to stdout\n");
+        s->filter = "/dev/stdout";
+    }
 
-	freeRTS();
-	fclose(fp_filter);
+	printFilter(s, ntiles, rts_hash);
+
+	freeRTS(s, rts_hash);
 }
 
 void applyFilter(Settings *s)
@@ -910,21 +865,19 @@ void dumpFilterFile(char *filename)
 int main(int argc, char **argv)
 {
 	Settings settings;
-	const char *override_intensity_dir = NULL;
 	int dumpFilter = 0;
 	char *cmd = NULL;
 
 	settings.filter = NULL;
-	settings.tileViz = 0;
 	settings.quiet = 0;
 	settings.dump = 0;
 	settings.calculate = 0;
 	settings.apply = 0;
 	settings.qcfail = 0;
-	settings.intensity_dir = NULL;
 	settings.snp_file = NULL;
 	settings.snp_hash = NULL;
 	settings.tile_hash = NULL;
+	settings.tileArray = NULL;
 	settings.output = NULL;
 	settings.in_bam_file = NULL;
 	settings.read_length[0] = 0;
@@ -932,8 +885,6 @@ int main(int argc, char **argv)
 	settings.read_length[2] = 0;
 	settings.working_dir = NULL;
 	settings.region_size = REGION_SIZE;
-	settings.width = 0;
-	settings.height = 0;
 	settings.nregions_x = 0;
 	settings.nregions_y = 0;
 	settings.nregions = 0;
@@ -944,15 +895,10 @@ int main(int argc, char **argv)
 	settings.region_deletion_threshold = REGION_DELETION_THRESHOLD;
 
 	static struct option long_options[] = {
-                   {"intensity_dir", 1, 0, 'i'},
-                   {"intensity-dir", 1, 0, 'i'},
                    {"snp_file", 1, 0, 's'},
                    {"snp-file", 1, 0, 's'},
-                   {"tileviz", 1, 0, 't'},
                    {"help", 0, 0, 'h'},
                    {"filter", 1, 0, 'F'},
-                   {"width", 1, 0, 'x'},
-                   {"height", 1, 0, 'y'},
                    {"version", 0, 0, 'v'},
                    {"region_min_count", 1, 0, 'm'},
                    {"region-size", 1, 0, 'r'},
@@ -973,15 +919,11 @@ int main(int argc, char **argv)
 			case 'D':	dumpFilter = 1; ncmd++; break;
 			case 'c':	settings.calculate = 1; ncmd++; break;
 			case 'a':	settings.apply = 1; ncmd++; break;
-			case 't':	parse_next_int(optarg,&settings.tileViz,NULL);	break;
 			case 'f':	settings.qcfail = 1;		break;
 			case 'u':	settings.compress = 0;		break;
 			case 'o':	settings.output = optarg;	break;
-			case 'i':	override_intensity_dir = optarg;	break;
 			case 's':	settings.snp_file = optarg;	break;
 			case 'F':	settings.filter = optarg;	break;
-			case 'x':	settings.width = atoi(optarg);	break;
-			case 'y':	settings.height = atoi(optarg);	break;
 			case 'r':	settings.region_size = atoi(optarg); break;
 			case 'm':	settings.region_min_count = atoi(optarg); break;
 			case 'z':	settings.region_mismatch_threshold = atof(optarg); break;
@@ -1008,12 +950,6 @@ int main(int argc, char **argv)
         if (!settings.filter && (dumpFilter || settings.apply)) die("Error: no filter file specified\n");
 
 	if (settings.calculate) {
-            if (settings.width < 0) die("Error: invalid tile width");
-	    if (settings.height < 0) die("Error: invalid tile height");
-
-            if (!override_intensity_dir && (!settings.width || !settings.height))
-                die("ERROR: you must specify an intensity dir or tile width and height\n");
-
    	    if (settings.region_size < 1) die("Error: invalid region size");
 
 	    if (settings.region_min_count < 1) die("Error: invalid region_min_count");
@@ -1043,13 +979,8 @@ int main(int argc, char **argv)
 		cmd = smalloc(2048);
 		strcat(cmd, argv[0]);
 		strcat(cmd, " -c ");
-		if (override_intensity_dir)              { strcat(cmd, " -i "); strcat(cmd, override_intensity_dir); }
 		if (settings.snp_file)                   { strcat(cmd, " -s "); strcat(cmd, settings.snp_file); }
 		if (settings.filter)                     { strcat(cmd, " -F "); strcat(cmd, settings.filter); }
-		if (settings.width)                      { snprintf(arg, 64, " --width %d", settings.width);
-                                                           strcat(cmd, arg); }
-		if (settings.height)                     { snprintf(arg, 64, " --height %d", settings.height);
-                                                           strcat(cmd, arg); }
 		if (settings.region_size)                { snprintf(arg, 64, " --region_size %d", settings.region_size);
                                                            strcat(cmd, arg); }
 		if (settings.region_min_count)           { snprintf(arg, 64, " --region_min_count %d", settings.region_min_count);
@@ -1080,13 +1011,6 @@ int main(int argc, char **argv)
 	if (!settings.quiet) display("Cmd: %s\n", cmd);
 	settings.cmdline = cmd;
 
-        if (override_intensity_dir) {
-                settings.intensity_dir = get_real_path_name(override_intensity_dir);
-                if (NULL == settings.intensity_dir) {
-                        die("ERROR: can't process intensity dir: %s\n", override_intensity_dir);
-                }
-        }
-
 	/* preserve starting directory */
 	settings.working_dir = getcwd(NULL,0);
 	if (NULL == settings.working_dir) {
@@ -1100,20 +1024,17 @@ int main(int argc, char **argv)
 	if (dumpFilter) dumpFilterFile(settings.filter);
 
 	/* calculate the filter */
-        if (settings.calculate) {
-                /* set the number of regions */
-                setRegions(&settings);
-
-                /* read the snp_file */
-                if (NULL != settings.snp_file) {
-                        settings.snp_hash = readSnpFile(settings.snp_file);
-                        if (NULL == settings.snp_hash) {
-                                die("ERROR: reading snp file %s\n", settings.snp_file);
-                        }
-                }
-
-                calculateFilter(&settings);
+    if (settings.calculate) {
+        /* read the snp_file */
+        if (NULL != settings.snp_file) {
+            settings.snp_hash = readSnpFile(settings.snp_file);
+            if (NULL == settings.snp_hash) {
+                die("ERROR: reading snp file %s\n", settings.snp_file);
+            }
         }
+
+        calculateFilter(&settings);
+    }
 
 	/* apply the  filter */
 	if (settings.apply) applyFilter(&settings);
