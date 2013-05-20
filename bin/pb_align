@@ -24,10 +24,11 @@ initialise ()
     aln_parms=""
     sam_parms=""
     spatial_filter=""
+    intensity_dir=""
     sf_parms=""
     bam_join_jar="/software/solexa/bin/aligners/illumina2bam/current/BamMerger.jar"
 
-    TEMP=`getopt -a -o h --long bam:,read:,read1:,read2:,pf_filter,ref:,aln_parms:,sam_parms:,spatial_filter,sf_parms:,bam_join_jar:,prefix:,help -n $0 -- "$@"`
+    TEMP=`getopt -a -o h --long bam:,read:,read1:,read2:,pf_filter,ref:,aln_parms:,sam_parms:,spatial_filter,intensity_dir:,sf_parms:,bam_join_jar:,prefix:,help -n $0 -- "$@"`
 
     if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
 
@@ -44,6 +45,7 @@ initialise ()
             --aln_parms) aln_parms=$2; echo "aln_parms options $aln_parms" >&2; shift 2 ;;
             --sam_parms) sam_parms=$2; echo "sam_parms options $sam_parms" >&2; shift 2 ;;
  	    --spatial_filter) spatial_filter=1; echo "will apply spatial_filter" >&2; shift 1 ;;
+            --intensity_dir) intensity_dir=$2; echo "DEPRECATED intensity_dir $intensity_dir DEPRECATED" >&2; shift 2 ;;
 	    --sf_parms) sf_parms=$2; echo "sf_parms options $sf_parms" >&2; shift 2 ;;
 	    --bam_join_jar) bam_join_jar=$2; echo "bam_join_jar $bam_join_jar" >&2; shift 2 ;;
             --prefix) prefix=$2; echo "prefix $prefix" >&2; shift 2 ;;
@@ -71,6 +73,9 @@ initialise ()
                        echo "                   ";
                        echo "                   ";
                        echo "       --spatial_filter     apply spatial filtering to the bam files";
+                       echo "                   ";
+                       echo "       --intensity_dir <raw intensity directory>";
+                       echo "                             deprecated, no longer used";
                        echo "                   ";
                        echo "       --sf_parms <spatial_filter parameters>";
                        echo "                             no default";
