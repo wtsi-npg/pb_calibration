@@ -287,7 +287,7 @@ static int optimalPurityBin(SurvTable *st)
     int i;
 
     /* find optimal purity which gives the best separation between bases and errors */
-    for(i=0;i<76;i++)
+    for(i=0;i<st->nbins;i++)
     {
         float frac_bases, frac_errors, diff_frac;
         frac_bases = (float)cum_bases/(float)st->total_bases;
@@ -313,7 +313,7 @@ static int maximumQualityBin(SurvTable *st)
     int i;
 
     /* find maximum (integer) quality */
-    for(i=0;i<76;i++)
+    for(i=0;i<st->nbins;i++)
     {
         float error_rate, quality;
         int iq;
@@ -519,6 +519,7 @@ static void makeGlobalSurvTable(Settings *s, int ntiles, SurvTable **sts)
     completeSurvTable(s, &sts[ntiles*N_READS], 0);
 
 #ifdef ST_STRUCTURE
+    int j;
     for(read=0;read<N_READS;read++)
     {
         read_length = s->read_length[read];
@@ -584,6 +585,7 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
             // skip st with no data
             if( 0 == st->total_bases ) continue;
 
+            // mimsmatch Subs H (per cycle): MSH
             fprintf(fp, "#MSL\t%d\t%d", read, cycle);
             for (j=0;j<NUM_SUBST;j++)
             {
@@ -593,6 +595,8 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
                 fprintf(fp, "\t%s\t%ld", subst, st->substL[j]);
             }
             fprintf(fp, "\n");
+
+            // mimsmatch Subs L (per cycle): MSL
             fprintf(fp, "#MSH\t%d\t%d", read, cycle);
             for (j=0;j<NUM_SUBST;j++)
             {
@@ -610,47 +614,73 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
         SurvTable *st = sts[(N_TILES+1)*N_READS+read];
         if( NULL == st) continue;
 
+        // substitution error tables (curves) per purity : SET
+        for(i=0;i<st->nbins;i++)
+        {
+            fprintf(fp, "#SET\t%d\t%.2f", read, st->purity[i]);
+            for (j=0;j<NUM_SUBST;j++)
+            {
+                char *subst;
+                subst=word2str(j,LEN_SUBST);
+                if (subst[0]==subst[1]) continue;
+                fprintf(fp, "\t%s\t%ld", subst, st->subst[j][i]);
+            }
+            fprintf(fp, "\n");
+        }
+
+        // substitution profile H : PRH
+        fprintf(fp, "#PRH\t%d", read);
         for (j=0;j<NUM_SUBST;j++)
         {
             char *subst;
             subst=word2str(j,LEN_SUBST);
             if (subst[0]==subst[1]) continue;
-            for(i=0;i<st->nbins;i++)
-                 fprintf(fp, "#SET\t%.2f\t%d\t%s\t%ld\n",
-                         st->purity[i], read, subst, st->subst[j][i]);
+            fprintf(fp, "\t%s\t%ld", subst, st->substH[j]);
         }
+        fprintf(fp, "\n");
 
+        // substitution profile L : PRL
+        fprintf(fp, "#PRL\t%d", read);
         for (j=0;j<NUM_SUBST;j++)
         {
             char *subst;
             subst=word2str(j,LEN_SUBST);
             if (subst[0]==subst[1]) continue;
-            fprintf(fp, "#PRH\t%d\t%s\t%ld\n", read, subst, st->substH[j]);
+            fprintf(fp, "\t%s\t%ld", subst, st->substL[j]);
         }
+        fprintf(fp, "\n");
 
-        for (j=0;j<NUM_SUBST;j++)
-        {
-            char *subst;
-            subst=word2str(j,LEN_SUBST);
-            if (subst[0]==subst[1]) continue;
-            fprintf(fp, "#PRL\t%d\t%s\t%ld\n", read, subst, st->substL[j]);
-        }
+        char p;
 
-        for (j=0;j<NUM_CNTXT;j++)
+        // previous one nucleotide effect H : P1H
+        for (j=0,p='\0';j<NUM_CNTXT;j++)
         {
             char *cntxt;
             cntxt=word2str(j,LEN_CNTXT);
+            if (p != cntxt[0]) {
+                p = cntxt[0];
+                if (j) fprintf(fp, "\n");
+                fprintf(fp, "#P1H\t%d", read);
+            }
             if (cntxt[1]==cntxt[2]) continue;
-            fprintf(fp, "#P1H\t%d\t%s\t%ld\n", read, cntxt, st->cntxtH[j]);
+            fprintf(fp, "\t%s\t%ld", cntxt, st->cntxtH[j]);
         }
+        fprintf(fp, "\n");
 
-        for (j=0;j<NUM_CNTXT;j++)
+        // previous one nucleotide effect L : P1L
+        for (j=0, p='\0';j<NUM_CNTXT;j++)
         {
             char *cntxt;
             cntxt=word2str(j,LEN_CNTXT);
+            if (p != cntxt[0]) {
+                p = cntxt[0];
+                if (j) fprintf(fp, "\n");
+                fprintf(fp, "#P1L\t%d", read);
+            }
             if (cntxt[1]==cntxt[2]) continue;
-            fprintf(fp, "#P1L\t%d\t%s\t%ld\n", read, cntxt, st->cntxtL[j]);
+            fprintf(fp, "\t%s\t%ld", cntxt, st->cntxtL[j]);
         }
+        fprintf(fp, "\n");
     }
     
     fclose(fp);
@@ -756,8 +786,8 @@ static void freeCalTable(Settings *s, CalTable **cts)
 
 static void optimisePurityBins(Settings *s, SurvTable *st, CalTable *ct)
 {
-    float purity_bins[76];
-    int npurity_bins = 0;
+    float purity[st->nbins];
+    int nbins = 0;
 
     int i, j;
     int ipopt = 0, ipmax = 0;
@@ -776,9 +806,9 @@ static void optimisePurityBins(Settings *s, SurvTable *st, CalTable *ct)
 
     /* first bin */
     ipbin = 0;
-    purity_bins[npurity_bins++] = st->purity[ipbin];
+    purity[nbins++] = st->purity[ipbin];
 #if 0
-    display("1: npurity_bins=%d ipbin=%d purity=%f\n", npurity_bins, ipbin, st->purity[ipbin]);
+    display("1: nbins=%d ipbin=%d purity=%f\n", nbins, ipbin, st->purity[ipbin]);
 #endif
 
     if (ipopt > 0)
@@ -793,18 +823,18 @@ static void optimisePurityBins(Settings *s, SurvTable *st, CalTable *ct)
                 break;
             if (ip > ipbin) {
                 ipbin = ip;
-                purity_bins[npurity_bins++] = st->purity[ipbin];
+                purity[nbins++] = st->purity[ipbin];
 #if 0
-                display("2: npurity_bins=%d ipbin=%d purity=%f\n", npurity_bins, ipbin, st->purity[ipbin]);
+                display("2: nbins=%d ipbin=%d purity=%f\n", nbins, ipbin, st->purity[ipbin]);
 #endif
             }
         }
 
         /* add the optimal bin */
         ipbin = ipopt;
-        purity_bins[npurity_bins++] = st->purity[ipbin];
+        purity[nbins++] = st->purity[ipbin];
 #if 0
-        display("3: npurity_bins=%d ipbin=%d purity=%f\n", npurity_bins, ipbin, st->purity[ipbin]);
+        display("3: nbins=%d ipbin=%d purity=%f\n", nbins, ipbin, st->purity[ipbin]);
 #endif
     }
 
@@ -820,36 +850,36 @@ static void optimisePurityBins(Settings *s, SurvTable *st, CalTable *ct)
                 break;
             if (ip > ipbin) {
                 ipbin = ip;
-                purity_bins[npurity_bins++] = st->purity[ipbin];
+                purity[nbins++] = st->purity[ipbin];
 #if 0
-                display("4: npurity_bins=%d ipbin=%d purity=%f\n", npurity_bins, ipbin, st->purity[ipbin]);
+                display("4: nbins=%d ipbin=%d purity=%f\n", nbins, ipbin, st->purity[ipbin]);
 #endif
             }
         }
 
         /* add pmax */
         ipbin = ipmax;
-        purity_bins[npurity_bins++] = st->purity[ipbin];
+        purity[nbins++] = st->purity[ipbin];
 #if 0
-        display("5: npurity_bins=%d ipbin=%d purity=%f\n", npurity_bins, ipbin, st->purity[ipbin]);
+        display("5: nbins=%d ipbin=%d purity=%f\n", nbins, ipbin, st->purity[ipbin]);
 #endif
     }
 
     /* add another bin if pmax is not the maximum possible purity value */
     if (ipmax < 75)
-        purity_bins[npurity_bins++] = st->purity[75];
+        purity[nbins++] = st->purity[75];
 #if 0
     if (ipmax < 75)
-        display("6: npurity_bins=%d ipbin=%d purity=%f\n", npurity_bins, 75, st->purity[75]);
+        display("6: nbins=%d ipbin=%d purity=%f\n", nbins, 75, st->purity[75]);
 #endif
 
     /* move data into the new set of bins */
 
-    ct->nbins = npurity_bins;
+    ct->nbins = nbins;
 
     for(i=0;i<ct->nbins;i++)
     {
-        ct->purity[i] = purity_bins[i];
+        ct->purity[i] = purity[i];
         ct->num_bases[i]  = 0;
         ct->num_errors[i] = 0;
     }
