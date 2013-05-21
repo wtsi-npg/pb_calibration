@@ -397,3 +397,8 @@ char *get_command_line(int argc, char **argv) {
     
     return cmdline;
 }
+
+int tile_sort(const void *t1, const void *t2) {
+    return *(int *)t1 > *(int *)t2;
+}
+

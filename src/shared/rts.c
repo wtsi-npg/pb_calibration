@@ -8,11 +8,7 @@
 #include <die.h>
 #include <rts.h>
 
-static RegionTable *rts[N_READS] = {NULL, NULL, NULL};
 static Header *_hdr = NULL;
-static int n_tiles = 0;
-static int n_regions = 0;
-static int n_cycles[N_READS] = {0, 0, 0};
 static char *filterData = NULL;
 
 // The Perl 'chomp()' function is too useful not to recreate it here...
@@ -21,48 +17,6 @@ static void chomp(char *line)
     int n = strlen(line) - 1;
     if (line[n] == '\n') line[n] = 0;
     return;
-}
-
-//
-// RTS Methods
-//
-static inline int getIndex(int itile, int iregion, int iread, int icycle)
-{
-	return (itile * n_regions * n_cycles[iread]) + (icycle * n_regions) + iregion;
-}
-
-void initRTS(int tiles, int regions, int iread, int cycles) 
-{
-        if ((n_tiles > 0) && (tiles != n_tiles)) die("Error in initRTS: inconsistent ntiles: have %d expected %d\n", tiles, n_tiles);
-        if ((n_regions > 0) && (regions != n_regions)) die("Error in initRTS: inconsistent nregions: have %d expected %d\n", regions, n_regions);
-	if ((iread < 0) || (iread >= N_READS)) die("Error in initRTS: iread is %d: must be in [0..%d]\n", iread, N_READS-1);
-
-        n_tiles = tiles;
-	n_regions = regions;
-	n_cycles[iread] = cycles;
-	rts[iread] = smalloc(n_tiles * n_regions * n_cycles[iread] * sizeof(RegionTable));
-}
-
-void freeRTS(void)
-{
-        int iread;
-        for (iread=0; iread<N_READS; iread++) {
-                  if (rts[iread]) free(rts[iread]);
-                  rts[iread] = NULL;
-        }
-}
-
-RegionTable *getRTS(int itile, int iregion, int iread, int icycle)
-{
-	if ((itile < 0) || (itile >= n_tiles)) die("Error in getRTS: itile is %d: must be in [0..%d]\n", itile, n_tiles-1);
-	if ((iregion < 0) || (iregion >= n_regions)) die("Error in getRTS: iregion is %d: must be in [0..%d]\n", iregion, n_regions-1);
-	if ((iread < 0) || (iread >= N_READS)) die("Error in getRTS: iread is %d: must be in [0..%d]\n", iread, N_READS-1);
-	if ((icycle < 0) || (icycle >= n_cycles[iread])) die("Error in getRTS: icycle is %d: must be in [0..%d]\n", icycle, n_cycles[iread]-1);
-
-	if (!rts[iread]) die("RTS has not been initialised for iread %d\n", iread);
-
-	int index = getIndex(itile,iregion,iread,icycle);
-	return rts[iread] + index;
 }
 
 //
@@ -160,13 +114,18 @@ char getFilterData(int tile, int read, int cycle, int region)
 	return filterData[ (itile * totalCycleLength * _hdr->nregions) + ((cycleLength + cycle) * _hdr->nregions) + region];
 }
 
+// which region is x in?
+int x2region(int x, int region_size)
+{
+    int coord_shift = (_hdr ? _hdr->coord_shift : COORD_SHIFT);
+    int coord_factor = (_hdr ? _hdr->coord_factor : COORD_FACTOR);
+    float x_coord = (float)(x - coord_shift) / (float)coord_factor;
+    return (int)(x_coord / region_size);
+}
+
 // which region is (x,y) in?
 int xy2region(int x, int y, int region_size, int nregions_x, int nregions_y)
 {
-	int coord_shift = (_hdr ? _hdr->coord_shift : COORD_SHIFT);
-	int coord_factor = (_hdr ? _hdr->coord_factor : COORD_FACTOR);
-    float x_coord = (float)(x - coord_shift) / (float)coord_factor;
-    float y_coord = (float)(y - coord_shift) / (float)coord_factor;
-    return (int)(x_coord / region_size) * nregions_y + (int)(y_coord / region_size);
+    return x2region(x, region_size) * nregions_y + x2region(y, region_size);
 }
 
