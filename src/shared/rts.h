@@ -25,8 +25,8 @@ typedef struct {
     int coord_shift;
     int coord_factor;
     int ntiles;
-	int *tileArray;
-	int region_size;
+    int *tileArray;
+    int region_size;
     int nregions;
     int nregions_x;
     int nregions_y;
@@ -48,11 +48,6 @@ typedef struct {
 	char state;
 } RegionTable;
 
-// RTS Methods
-void initRTS(int n_tiles, int n_regions, int iread, int n_cycles);
-void freeRTS(void);
-RegionTable *getRTS(int itile, int iregion, int iread, int icycle);
-
 // Filter methods
 void writeHeader(FILE *fp, Header *hdr);
 void addHeaderComment(Header *hdr, char *comment);
@@ -60,6 +55,7 @@ void readHeader(FILE *fp, Header *hdr);
 void readFilterData(FILE *fp, Header *hdr);
 char getFilterData(int tile, int read, int cycle, int region);
 
+int x2region(int x, int region_size);
 int xy2region(int x, int y, int region_size, int nregions_x, int nregions_y);
 
-#endif /* DIE_H_INCLUDED */
+#endif /* RTS_H_INCLUDED */

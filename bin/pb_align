@@ -45,7 +45,7 @@ initialise ()
             --aln_parms) aln_parms=$2; echo "aln_parms options $aln_parms" >&2; shift 2 ;;
             --sam_parms) sam_parms=$2; echo "sam_parms options $sam_parms" >&2; shift 2 ;;
  	    --spatial_filter) spatial_filter=1; echo "will apply spatial_filter" >&2; shift 1 ;;
-            --intensity_dir) intensity_dir=$2; echo "intensity_dir $intensity_dir" >&2; shift 2 ;;
+            --intensity_dir) intensity_dir=$2; echo "DEPRECATED intensity_dir $intensity_dir DEPRECATED" >&2; shift 2 ;;
 	    --sf_parms) sf_parms=$2; echo "sf_parms options $sf_parms" >&2; shift 2 ;;
 	    --bam_join_jar) bam_join_jar=$2; echo "bam_join_jar $bam_join_jar" >&2; shift 2 ;;
             --prefix) prefix=$2; echo "prefix $prefix" >&2; shift 2 ;;
@@ -75,6 +75,7 @@ initialise ()
                        echo "       --spatial_filter     apply spatial filtering to the bam files";
                        echo "                   ";
                        echo "       --intensity_dir <raw intensity directory>";
+                       echo "                             deprecated, no longer used";
                        echo "                   ";
                        echo "       --sf_parms <spatial_filter parameters>";
                        echo "                             no default";
@@ -109,11 +110,6 @@ initialise ()
 
     if [ -z $ref ] ; then
         echo "You must specify a reference" >&2
-        exit 1
-    fi
-
-    if [ $spatial_filter ] && [ -z $intensity_dir ] ; then
-        echo "You must supply an intensity_dir if you want to apply a spatial filter" >&2
         exit 1
     fi
 
@@ -219,7 +215,7 @@ echo "Making spatial filter..." >&2
 # Added 8 Oct 2012 by js10
 #
 if [ $spatial_filter ] ; then
-	$tools/spatial_filter -c $sf_parms -i $intensity_dir --filter ${output}.filter $output
+	$tools/spatial_filter -c $sf_parms --filter ${output}.filter $output
 	if [ ! -s ${output}.filter ] ; then
 		echo "spatial_filter failed to create a filter file ${output}.filter" >&2
 		exit 1
