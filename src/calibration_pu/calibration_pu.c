@@ -139,11 +139,14 @@ typedef struct {
 #ifdef ST_STRUCTURE
     long        *subst[NUM_SUBST];
     long        *cntxt[NUM_CNTXT];
+    long        *homop[NUM_CNTXT];
     long        substH[NUM_SUBST];
     long        substL[NUM_SUBST];
     long        cntxtH[NUM_CNTXT];
     long        cntxtL[NUM_CNTXT];
-#endif
+    long        homopH[NUM_CNTXT];
+    long        homopL[NUM_CNTXT];
+#endif    
     long        total_bases;
     long        total_errors;
     float       optimal_purity;
@@ -217,10 +220,15 @@ static void initialiseSurvTable(Settings *s, SurvTable *st, int tile, int read, 
     }
     for (j=0;j<NUM_CNTXT;j++) {
         st->cntxt[j] = (long *)smalloc(st->nbins * sizeof(long));
-        for (i=0;i<st->nbins;i++) 
+        for (i=0;i<st->nbins;i++)
             st->cntxt[j][i] = 0;
         st->cntxtH[j]=0;
 	st->cntxtL[j]=0;
+        for (i=0;i<st->nbins;i++)
+            st->homop[j][i] = 0;
+        st->homop[j] = (long *)smalloc(st->nbins * sizeof(long));
+        st->homopH[j]=0;
+	st->homopL[j]=0;
     }
 #endif
 
@@ -250,8 +258,9 @@ static void freeSurvTable(Settings *s, SurvTable **sts)
                         free(st->subst[j]);
                     for (j=0;j<NUM_CNTXT;j++)
                         free(st->cntxt[j]);
+                    for (j=0;j<NUM_CNTXT;j++)
+                        free(st->homop[j]);
 #endif                    
-
                     st->nbins = 0;
                 }
             }
@@ -271,6 +280,8 @@ static void freeSurvTable(Settings *s, SurvTable **sts)
                 free(st->subst[j]);
             for (j=0;j<NUM_CNTXT;j++)
                 free(st->cntxt[j]);
+            for (j=0;j<NUM_CNTXT;j++)
+                free(st->homop[j]);
             st->nbins = 0;
         }
     }
@@ -374,6 +385,8 @@ static void completeSurvTable(Settings *s, SurvTable **sts, int no_cycles)
                         st->substH[j] += st->subst[j][i];
                     for(j=0;j<NUM_CNTXT;j++)
                         st->cntxtH[j] += st->cntxt[j][i];
+                    for(j=0;j<NUM_CNTXT;j++)
+                        st->homopH[j] += st->homop[j][i];
                 }
                 else
                 {
@@ -381,6 +394,8 @@ static void completeSurvTable(Settings *s, SurvTable **sts, int no_cycles)
                         st->substL[j] += st->subst[j][i];
                     for(j=0;j<NUM_CNTXT;j++)
                         st->cntxtL[j] += st->cntxt[j][i];
+                    for(j=0;j<NUM_CNTXT;j++)
+                        st->homopL[j] += st->homop[j][i];
                 }
             }
 #endif                
@@ -507,8 +522,10 @@ static void makeGlobalSurvTable(Settings *s, int ntiles, SurvTable **sts)
                     for(j=0;j<NUM_CNTXT;j++)
                         for(i=0;i<st->nbins;i++)
                             st->cntxt[j][i] += tile_st->cntxt[j][i];
+                    for(j=0;j<NUM_CNTXT;j++)
+                        for(i=0;i<st->nbins;i++)
+                            st->homop[j][i] += tile_st->homop[j][i];
 #endif
-
                     tile_st->total_bases = 0;
                     tile_st->total_errors = 0;
                 }
@@ -544,6 +561,9 @@ static void makeGlobalSurvTable(Settings *s, int ntiles, SurvTable **sts)
             for(j=0;j<NUM_CNTXT;j++)
                 for(i=0;i<st->nbins;i++)
                     st->cntxt[j][i] += cycle_st->cntxt[j][i];
+            for(j=0;j<NUM_CNTXT;j++)
+                for(i=0;i<st->nbins;i++)
+                    st->homop[j][i] += cycle_st->homop[j][i];
         }
     }
 
@@ -679,6 +699,46 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
             }
             if (cntxt[1]==cntxt[2]) continue;
             fprintf(fp, "\t%s\t%ld", cntxt, st->cntxtL[j]);
+        }
+        fprintf(fp, "\n");
+
+        // homopolymer effect H : HPH
+        for (j=0,p='\0';j<NUM_CNTXT;j++)
+        {
+            int k;
+            char homop[LEN_HOMOP];
+            char *cntxt;
+            cntxt=word2str(j,LEN_CNTXT);
+            if (p != cntxt[0]) {
+                p = cntxt[0];
+                if (j) fprintf(fp, "\n");
+                fprintf(fp, "#HPH\t%d", read);
+            }
+            if (cntxt[1]==cntxt[2]) continue;
+            for (k=0;k<(LEN_HOMOP-1);k++)
+                homop[k]=cntxt[0];
+            homop[k]='\0';
+            fprintf(fp, "\t%s%s\t%ld", homop, cntxt, st->homopH[j]);
+        }
+        fprintf(fp, "\n");
+
+        // homopolymer effect L : HPL
+        for (j=0,p='\0';j<NUM_CNTXT;j++)
+        {
+            int k;
+            char homop[LEN_HOMOP];
+            char *cntxt;
+            cntxt=word2str(j,LEN_CNTXT);
+            if (p != cntxt[0]) {
+                p = cntxt[0];
+                if (j) fprintf(fp, "\n");
+                fprintf(fp, "#HPL\t%d", read);
+            }
+            if (cntxt[1]==cntxt[2]) continue;
+            for (k=0;k<(LEN_HOMOP-1);k++)
+                homop[k]=cntxt[0];
+            homop[k]='\0';
+            fprintf(fp, "\t%s%s\t%ld", homop, cntxt, st->homopL[j]);
         }
         fprintf(fp, "\n");
     }
@@ -1109,8 +1169,17 @@ static int updateSurvTable(Settings *s, SurvTable **sts, CifData *cif_data,
                 cntxt[1]=read_ref[b];
                 cntxt[2]=read_seq[b];
                 word=str2word(cntxt,LEN_CNTXT);
-                if( word >= 0 )
+                if( word >= 0 ) 
                     st->cntxt[word][ibin]++;
+
+                if( word >= 0 && b >= LEN_HOMOP ){
+                    int l;
+                    for(l=1; l<=LEN_HOMOP; l++)
+                        if( read_ref[b-l] != cntxt[0] )
+                            break;
+                    if( l > LEN_HOMOP)
+                        st->homop[word][ibin]++;
+                }
             }
 #endif
         }
