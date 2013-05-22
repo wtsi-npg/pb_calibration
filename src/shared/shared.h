@@ -3,6 +3,7 @@
 #define NUM_SUBST  1<<(2*LEN_SUBST)
 #define LEN_CNTXT  3
 #define NUM_CNTXT  1<<(2*LEN_CNTXT)
+#define LEN_HOMOP  4
 
 int *reverse_int(int *num, int n);
 char *reverse_seq(char *seq);
