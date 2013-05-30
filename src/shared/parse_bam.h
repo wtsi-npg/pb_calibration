@@ -23,3 +23,10 @@ int parse_bam_alignments(samfile_t *fp,
                          const int read_buff_size,
                          HashTable *snp_hash);
 
+void bam_header_add_pg(       char *id,
+                              char *pn,
+                              char *ds,
+                              char *cl,
+                      bam_header_t *bam_header);
+
+bam_header_t *bam_header_dup(const bam_header_t *h0); /* just because it's not in bam.h in samtools 0.18 ...*/

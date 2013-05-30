@@ -1,8 +1,14 @@
+#include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <assert.h>
+#include <limits.h>
+#include "smalloc.h"
+#include "shared.h"
 #include "die.h"
+
 
 static char *complement_table = NULL;
 
@@ -206,9 +212,193 @@ const char *parse_next_int(const char *str, int *val, const char *sep)
 }
 
 
+char *append_int(char *cp, int i) {
+    int j;
+
+    if (i < 0) {
+	*cp++ = '-';
+	if (i == INT_MIN) {
+	    *cp++ = '2'; *cp++ = '1'; *cp++ = '4'; *cp++ = '7';
+	    *cp++ = '4'; *cp++ = '8'; *cp++ = '3'; *cp++ = '6';
+	    *cp++ = '4'; *cp++ = '8';
+	    return cp;
+	}
+
+	i = -i;
+    } else if (i == 0) {
+	*cp++ = '0';
+	return cp;
+    }
+
+    //if (i < 10)         goto b0;
+    if (i < 100)        goto b1;
+    //if (i < 1000)       goto b2;
+    if (i < 10000)      goto b3;
+    //if (i < 100000)     goto b4;
+    if (i < 1000000)    goto b5;
+    //if (i < 10000000)   goto b6;
+    if (i < 100000000)  goto b7;
+
+     if ((j = i / 1000000000)) {*cp++ = j + '0'; i -= j*1000000000; goto x8;}
+     if ((j = i / 100000000))  {*cp++ = j + '0'; i -= j*100000000;  goto x7;}
+ b7: if ((j = i / 10000000))   {*cp++ = j + '0'; i -= j*10000000;   goto x6;}
+     if ((j = i / 1000000))    {*cp++ = j + '0', i -= j*1000000;    goto x5;}
+ b5: if ((j = i / 100000))     {*cp++ = j + '0', i -= j*100000;     goto x4;}
+     if ((j = i / 10000))      {*cp++ = j + '0', i -= j*10000;      goto x3;}
+ b3: if ((j = i / 1000))       {*cp++ = j + '0', i -= j*1000;       goto x2;}
+     if ((j = i / 100))        {*cp++ = j + '0', i -= j*100;        goto x1;}
+ b1: if ((j = i / 10))         {*cp++ = j + '0', i -= j*10;         goto x0;}
+     if (i)                     *cp++ = i + '0';
+    return cp;
+
+ x8: *cp++ = i / 100000000 + '0', i %= 100000000;
+ x7: *cp++ = i / 10000000  + '0', i %= 10000000;
+ x6: *cp++ = i / 1000000   + '0', i %= 1000000;
+ x5: *cp++ = i / 100000    + '0', i %= 100000;
+ x4: *cp++ = i / 10000     + '0', i %= 10000;
+ x3: *cp++ = i / 1000      + '0', i %= 1000;
+ x2: *cp++ = i / 100       + '0', i %= 100;
+ x1: *cp++ = i / 10        + '0', i %= 10;
+ x0: *cp++ = i             + '0';
+
+    return cp;
+}
+
+char *append_char(char *cp, char c) {
+    *cp++ = c;
+
+    return cp;
+}
+
+static int* lookup = NULL;
+
+static void init_lookup(void) {
+    int i;
+
+    lookup = (int *) calloc(256, sizeof(int));
+    for (i = 0; i < 256; i++)
+	lookup[i] = -1;
+    lookup['A'] = 0;
+    lookup['a'] = 0;
+    lookup['C'] = 1;
+    lookup['c'] = 1;
+    lookup['G'] = 2;
+    lookup['g'] = 2;
+    lookup['T'] = 3;
+    lookup['t'] = 3;
+}
+
+int str2word(char *seq, int NH) {
+    int i, word = -1;
+
+    if (!lookup) {
+        init_lookup();
+    }
+    
+    if (NH > MAXNH)
+	return word;
+    
+    word = 0;
+    for (i = 0; i < NH; i++) {
+	word <<= 2;
+	word |= lookup[(int)seq[i]];
+    }
+
+    return word;
+}
+
+char *word2str(int word, int NH) {
+    static char str[MAXNH+1];
+    int i;
+
+    if (!lookup) {
+        init_lookup();
+    }
+
+    for (i = 0; i < NH; i++)
+	str[i] = "ACGT"[(word >> (2*(NH-1)-2*i)) & 3];
+    str[NH] = 0;
+
+    return str;
+}
+
 void checked_chdir(const char *dir)
 {
     if (chdir(dir)) die("ERROR: failed to change directory to: %s\n", dir);
 
+}
+
+/*
+ * Get current working directory (allocating memory for string)
+ * Consider defining away with getcwd(NULL,0)....
+ */
+char *alloc_getcwd(void) {
+    size_t sz = 1024;
+    char *out = smalloc(sz);
+    
+    while (NULL == getcwd(out, sz)) {
+        if (ERANGE != errno) {
+            free(out);
+            return NULL;
+        }
+
+        sz *= 2;
+        out = srealloc(out, sz);
+    }
+
+    return out;
+}
+
+/*
+ * Get the absolute file path and (depending on the libc) the real
+ * name for sym-link dirs in path.
+ * Safe for in_path == out_path case.
+ */
+char *get_real_path_name(const char* in_path) {
+    char   *oldwd;
+    char   *out_path;
+
+    oldwd = alloc_getcwd();
+    if (NULL == oldwd) return NULL;
+
+    checked_chdir(in_path);
+
+    out_path = alloc_getcwd();
+    
+    checked_chdir(oldwd);
+    free(oldwd);
+
+    return out_path;
+}
+
+
+char *get_command_line(int argc, char **argv) {
+    char *cmdline = NULL;
+    size_t sz = argc; /* All the spaces & the terminating \0 */
+    size_t pos = 0;
+    int i;
+
+    for (i = 0; i < argc; i++) {
+        sz += strlen(argv[i]);
+    }
+
+    cmdline = smalloc(sz);
+
+    for (i = 0; i < argc && pos < sz; i++) {
+        int len = snprintf(cmdline + pos, sz - pos,
+                           i > 0 ? " %s" : "%s", argv[i]);
+        if (len < 0) {
+            perror("snprintf");
+            exit(EXIT_FAILURE);
+        }
+        pos += len;
+    }
+    assert(pos < sz);
+    
+    return cmdline;
+}
+
+int tile_sort(const void *t1, const void *t2) {
+    return *(int *)t1 > *(int *)t2;
 }
 
