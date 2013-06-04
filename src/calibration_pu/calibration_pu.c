@@ -49,7 +49,7 @@
 /*
  * Author: Steven Leonard, Jan 2009
  *
- * This code generates a purity based calibration table
+ * This code generates a purity or quality based calibration table
  */
 
 /*
@@ -77,7 +77,7 @@
 #define PROPERLY_PAIRED
 //#define CALDATA
 //#define CHECK_BASECALL
-//#define ST_STRUCTURE
+#define ST_STRUCTURE
 
 #ifdef HAVE_CONFIG_H
 #include "pb_config.h"
@@ -95,6 +95,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <stdarg.h>
+#include <search.h>
 
 /* To turn off assert for a small speed gain, uncomment this line */
 /* #define NDEBUG */
@@ -122,10 +123,14 @@
 /* if we split data by state, using a filter file rather than tile, use tile as a place holder for state */
 #define N_STATES 2
 
+#define ST_MODE_PURITY  (1<<0)
+#define ST_MODE_QUALITY (1<<1)
+
 #define ST_STATUS_GOOD  (1<<0)
 #define ST_STATUS_BAD   (1<<1)
 
 typedef struct {
+    int         mode;
     int         tile;
     int         read;
     int         cycle;
@@ -133,30 +138,34 @@ typedef struct {
     float       offset;
     float       delta;
     float       scale;
-    float       *purity;
+    float       *predictor;
     long        *num_bases;
     long        *num_errors;
 #ifdef ST_STRUCTURE
     long        *subst[NUM_SUBST];
     long        *cntxt[NUM_CNTXT];
+    long        *homop[NUM_CNTXT];
     long        substH[NUM_SUBST];
     long        substL[NUM_SUBST];
     long        cntxtH[NUM_CNTXT];
     long        cntxtL[NUM_CNTXT];
-#endif
+    long        homopH[NUM_CNTXT];
+    long        homopL[NUM_CNTXT];
+#endif    
     long        total_bases;
     long        total_errors;
-    float       optimal_purity;
+    float       optimal_predictor;
     float       quality;
     int         status;
 } SurvTable;
 
 typedef struct {
+    int         mode;
     int         tile;
     int         read;
     int         cycle;
     int         nbins;
-    float       *purity;
+    float       *predictor;
     long        *num_bases;
     long        *num_errors;
     float       *frac_bases;
@@ -187,18 +196,29 @@ static void initialiseSurvTable(Settings *s, SurvTable *st, int tile, int read, 
 {
     int i;
 
+    st->mode = (NULL == s->intensity_dir ? ST_MODE_QUALITY : ST_MODE_PURITY);
+
     st->tile  = tile;
     st->read  = read;
     st->cycle = cycle;
 
-    st->nbins = 76;
+    if (st->mode == ST_MODE_PURITY) {
+        st->nbins = 76;
 
-    st->offset = 0.25;
-    st->delta  = 0.01;
-    st->scale  = 1.0 / st->delta;
-    st->purity = smalloc(st->nbins * sizeof(float));
+        st->offset = 0.25;
+        st->delta  = 0.01;
+        st->scale  = 1.0 / st->delta;
+    } else {
+        st->nbins = 51;
+
+        st->offset = 0.0;
+        st->delta  = 1.0;
+        st->scale  = 1.0 / st->delta;
+    }
+
+    st->predictor = smalloc(st->nbins * sizeof(float));
     for (i=0;i<st->nbins;i++)
-        st->purity[i] = st->offset + i * st->delta;
+        st->predictor[i] = st->offset + i * st->delta;
 
     st->num_bases  = smalloc(st->nbins * sizeof(long));
     st->num_errors = smalloc(st->nbins * sizeof(long));
@@ -217,10 +237,15 @@ static void initialiseSurvTable(Settings *s, SurvTable *st, int tile, int read, 
     }
     for (j=0;j<NUM_CNTXT;j++) {
         st->cntxt[j] = (long *)smalloc(st->nbins * sizeof(long));
-        for (i=0;i<st->nbins;i++) 
+        for (i=0;i<st->nbins;i++)
             st->cntxt[j][i] = 0;
         st->cntxtH[j]=0;
 	st->cntxtL[j]=0;
+        st->homop[j] = (long *)smalloc(st->nbins * sizeof(long));
+        for (i=0;i<st->nbins;i++)
+            st->homop[j][i] = 0;
+        st->homopH[j]=0;
+	st->homopL[j]=0;
     }
 #endif
 
@@ -241,7 +266,7 @@ static void freeSurvTable(Settings *s, SurvTable **sts)
             {
                 SurvTable *st = sts[itile*N_READS+read] + cycle;
                 if (st->nbins) {
-                    free(st->purity);
+                    free(st->predictor);
                     free(st->num_bases);
                     free(st->num_errors);
 #ifdef ST_STRUCTURE
@@ -250,8 +275,9 @@ static void freeSurvTable(Settings *s, SurvTable **sts)
                         free(st->subst[j]);
                     for (j=0;j<NUM_CNTXT;j++)
                         free(st->cntxt[j]);
+                    for (j=0;j<NUM_CNTXT;j++)
+                        free(st->homop[j]);
 #endif                    
-
                     st->nbins = 0;
                 }
             }
@@ -264,13 +290,15 @@ static void freeSurvTable(Settings *s, SurvTable **sts)
         SurvTable *st = sts[(N_TILES+1)*N_READS+read];
         if( NULL == st) continue;
         if (st->nbins) {
-            free(st->purity);
+            free(st->predictor);
             free(st->num_bases);
             free(st->num_errors);
             for (j=0;j<NUM_SUBST;j++)
                 free(st->subst[j]);
             for (j=0;j<NUM_CNTXT;j++)
                 free(st->cntxt[j]);
+            for (j=0;j<NUM_CNTXT;j++)
+                free(st->homop[j]);
             st->nbins = 0;
         }
     }
@@ -278,7 +306,7 @@ static void freeSurvTable(Settings *s, SurvTable **sts)
 
 }
 
-static int optimalPurityBin(SurvTable *st)
+static int optimalPredictorBin(SurvTable *st)
 {
     int ipopt = 0;
     float max_diff = 0.0;
@@ -286,7 +314,7 @@ static int optimalPurityBin(SurvTable *st)
     long cum_errors = st->total_errors;
     int i;
 
-    /* find optimal purity which gives the best separation between bases and errors */
+    /* find optimal predictor which gives the best separation between bases and errors */
     for(i=0;i<st->nbins;i++)
     {
         float frac_bases, frac_errors, diff_frac;
@@ -351,8 +379,8 @@ static void completeSurvTable(Settings *s, SurvTable **sts, int no_cycles)
                 st->total_bases += st->num_bases[i];
                 st->total_errors += st->num_errors[i];
 
-                // bases with purity=0.25 are called as N and explicitly get a quality of 0
-                if( st->purity[i] <= 0.25 )
+                // bases in the first bin (purity=0.25 or quality=0) are called as N and explicitly get a quality of 0
+                if( i == 0 )
                     continue;
 
                 quality_bases  += st->num_bases[i];
@@ -361,19 +389,21 @@ static void completeSurvTable(Settings *s, SurvTable **sts, int no_cycles)
 
             st->quality = -10.0 * log10((quality_errors + ssc)/(quality_bases + ssc));
 
-            ipopt = optimalPurityBin(st);
-            st->optimal_purity = st->purity[ipopt];
+            ipopt = optimalPredictorBin(st);
+            st->optimal_predictor = st->predictor[ipopt];
 
 #ifdef ST_STRUCTURE
             int j;
             for(i=0;i<st->nbins;i++)
             {
-                if (st->purity[i] > st->optimal_purity)
+                if (st->predictor[i] > st->optimal_predictor)
                 {
                     for(j=0;j<NUM_SUBST;j++)
                         st->substH[j] += st->subst[j][i];
                     for(j=0;j<NUM_CNTXT;j++)
                         st->cntxtH[j] += st->cntxt[j][i];
+                    for(j=0;j<NUM_CNTXT;j++)
+                        st->homopH[j] += st->homop[j][i];
                 }
                 else
                 {
@@ -381,6 +411,8 @@ static void completeSurvTable(Settings *s, SurvTable **sts, int no_cycles)
                         st->substL[j] += st->subst[j][i];
                     for(j=0;j<NUM_CNTXT;j++)
                         st->cntxtL[j] += st->cntxt[j][i];
+                    for(j=0;j<NUM_CNTXT;j++)
+                        st->homopL[j] += st->homop[j][i];
                 }
             }
 #endif                
@@ -507,8 +539,10 @@ static void makeGlobalSurvTable(Settings *s, int ntiles, SurvTable **sts)
                     for(j=0;j<NUM_CNTXT;j++)
                         for(i=0;i<st->nbins;i++)
                             st->cntxt[j][i] += tile_st->cntxt[j][i];
+                    for(j=0;j<NUM_CNTXT;j++)
+                        for(i=0;i<st->nbins;i++)
+                            st->homop[j][i] += tile_st->homop[j][i];
 #endif
-
                     tile_st->total_bases = 0;
                     tile_st->total_errors = 0;
                 }
@@ -544,6 +578,9 @@ static void makeGlobalSurvTable(Settings *s, int ntiles, SurvTable **sts)
             for(j=0;j<NUM_CNTXT;j++)
                 for(i=0;i<st->nbins;i++)
                     st->cntxt[j][i] += cycle_st->cntxt[j][i];
+            for(j=0;j<NUM_CNTXT;j++)
+                for(i=0;i<st->nbins;i++)
+                    st->homop[j][i] += cycle_st->homop[j][i];
         }
     }
 
@@ -556,24 +593,8 @@ static void makeGlobalSurvTable(Settings *s, int ntiles, SurvTable **sts)
 #ifdef ST_STRUCTURE
 static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
 {
-    FILE *fp;
-    int filename_sz;
-    char *filename;
+    FILE *fp = NULL;
     int read, cycle, i, j;
-
-    filename_sz = (NULL == s->prefix ? 0 : strlen(s->prefix)) + 100;
-    filename = smalloc(filename_sz);
-
-    sprintf(filename, "%s_purity_cycle_error.txt", s->prefix);
-    fp = fopen(filename, "w");
-    if( NULL == fp )
-    {
-        fprintf(stderr, "ERROR: can't open error table file %s: %s\n",
-                filename, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-
-    free(filename);
 
     for(read=0;read<N_READS;read++)
     {
@@ -584,6 +605,23 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
 
             // skip st with no data
             if( 0 == st->total_bases ) continue;
+
+            if( NULL == fp )
+            {
+                int filename_sz;
+                char *filename;
+                filename_sz = (NULL == s->prefix ? 0 : strlen(s->prefix)) + 100;
+                filename = smalloc(filename_sz);
+                sprintf(filename, "%s_%s_error.txt", s->prefix, (st->mode == ST_MODE_PURITY ? "purity" : "quality"));
+                fp = fopen(filename, "w");
+                if( NULL == fp )
+                {
+                    fprintf(stderr, "ERROR: can't open CT file %s: %s\n",
+                            filename, strerror(errno));
+                    exit(EXIT_FAILURE);
+                }
+                free(filename);
+            }
 
             // mimsmatch Subs H (per cycle): MSH
             fprintf(fp, "#MSL\t%d\t%d", read, cycle);
@@ -614,10 +652,10 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
         SurvTable *st = sts[(N_TILES+1)*N_READS+read];
         if( NULL == st) continue;
 
-        // substitution error tables (curves) per purity : SET
+        // substitution error tables (curves) per predictor : SET
         for(i=0;i<st->nbins;i++)
         {
-            fprintf(fp, "#SET\t%d\t%.2f", read, st->purity[i]);
+            fprintf(fp, "#SET\t%d\t%.2f", read, st->predictor[i]);
             for (j=0;j<NUM_SUBST;j++)
             {
                 char *subst;
@@ -681,6 +719,46 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
             fprintf(fp, "\t%s\t%ld", cntxt, st->cntxtL[j]);
         }
         fprintf(fp, "\n");
+
+        // homopolymer effect H : HPH
+        for (j=0,p='\0';j<NUM_CNTXT;j++)
+        {
+            int k;
+            char homop[LEN_HOMOP];
+            char *cntxt;
+            cntxt=word2str(j,LEN_CNTXT);
+            if (p != cntxt[0]) {
+                p = cntxt[0];
+                if (j) fprintf(fp, "\n");
+                fprintf(fp, "#HPH\t%d", read);
+            }
+            if (cntxt[1]==cntxt[2]) continue;
+            for (k=0;k<(LEN_HOMOP-1);k++)
+                homop[k]=cntxt[0];
+            homop[k]='\0';
+            fprintf(fp, "\t%s%s\t%ld", homop, cntxt, st->homopH[j]);
+        }
+        fprintf(fp, "\n");
+
+        // homopolymer effect L : HPL
+        for (j=0,p='\0';j<NUM_CNTXT;j++)
+        {
+            int k;
+            char homop[LEN_HOMOP];
+            char *cntxt;
+            cntxt=word2str(j,LEN_CNTXT);
+            if (p != cntxt[0]) {
+                p = cntxt[0];
+                if (j) fprintf(fp, "\n");
+                fprintf(fp, "#HPL\t%d", read);
+            }
+            if (cntxt[1]==cntxt[2]) continue;
+            for (k=0;k<(LEN_HOMOP-1);k++)
+                homop[k]=cntxt[0];
+            homop[k]='\0';
+            fprintf(fp, "\t%s%s\t%ld", homop, cntxt, st->homopL[j]);
+        }
+        fprintf(fp, "\n");
     }
     
     fclose(fp);
@@ -689,24 +767,8 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
 
 static void outputSurvTable(Settings *s, SurvTable **sts)
 {
-    FILE *fp;
-    int filename_sz;
-    char *filename;
+    FILE *fp = NULL;
     int itile, read, cycle, i;
-
-    filename_sz = (NULL == s->prefix ? 0 : strlen(s->prefix)) + 100;
-    filename = smalloc(filename_sz);
-
-    sprintf(filename, "%s_purity_cycle_surv.txt", s->prefix);
-    fp = fopen(filename, "w");
-    if( NULL == fp )
-    {
-        fprintf(stderr, "ERROR: can't open survival table file %s: %s\n",
-                filename, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-
-    free(filename);
 
     for(itile=0;itile<=N_TILES;itile++)
         for(read=0;read<N_READS;read++)
@@ -719,9 +781,26 @@ static void outputSurvTable(Settings *s, SurvTable **sts)
                 // skip st with no data
                 if( 0 == st->total_bases ) continue;
 
+                if( NULL == fp )
+                {
+                    int filename_sz;
+                    char *filename;
+                    filename_sz = (NULL == s->prefix ? 0 : strlen(s->prefix)) + 100;
+                    filename = smalloc(filename_sz);
+                    sprintf(filename, "%s_%s_cycle_surv.txt", s->prefix, (st->mode == ST_MODE_PURITY ? "purity" : "quality"));
+                    fp = fopen(filename, "w");
+                    if( NULL == fp )
+                    {
+                        fprintf(stderr, "ERROR: can't open survival table file %s: %s\n",
+                                filename, strerror(errno));
+                        exit(EXIT_FAILURE);
+                    }
+                    free(filename);
+                }
+
                 for(i=0;i<st->nbins;i++)
                     fprintf(fp, "%.2f\t%d\t%d\t%d\t%ld\t%ld\n",
-                            st->purity[i], st->read, st->cycle, st->tile,
+                            st->predictor[i], st->read, st->cycle, st->tile,
                             st->num_bases[i], st->num_errors[i]);
             }
         }
@@ -733,15 +812,17 @@ static void initialiseCalTable(SurvTable *st, CalTable *ct)
 {
     int i;
 
+    ct->mode  = st->mode;
+
     ct->tile  = st->tile;
     ct->read  = st->read;
     ct->cycle = st->cycle;
 
     ct->nbins = st->nbins;
 
-    ct->purity = smalloc(ct->nbins * sizeof(float));
+    ct->predictor = smalloc(ct->nbins * sizeof(float));
     for(i=0;i<ct->nbins;i++)
-        ct->purity[i] = st->purity[i];
+        ct->predictor[i] = st->predictor[i];
 
     ct->num_bases  = smalloc(ct->nbins * sizeof(long));
     ct->num_errors = smalloc(ct->nbins * sizeof(long));
@@ -771,7 +852,7 @@ static void freeCalTable(Settings *s, CalTable **cts)
             {
                 CalTable *ct = cts[itile*N_READS+read] + cycle;
                 if(ct->nbins) {
-                    free(ct->purity);
+                    free(ct->predictor);
                     free(ct->num_bases);
                     free(ct->num_errors);
                     free(ct->frac_bases);
@@ -784,9 +865,9 @@ static void freeCalTable(Settings *s, CalTable **cts)
         }
 }
 
-static void optimisePurityBins(Settings *s, SurvTable *st, CalTable *ct)
+static void optimisePredictorBins(Settings *s, SurvTable *st, CalTable *ct)
 {
-    float purity[st->nbins];
+    float predictor[st->nbins];
     int nbins = 0;
 
     int i, j;
@@ -794,7 +875,7 @@ static void optimisePurityBins(Settings *s, SurvTable *st, CalTable *ct)
     int ipbin;
     float pinc;
 
-    ipopt = optimalPurityBin(st);
+    ipopt = optimalPredictorBin(st);
     ipmax = maximumQualityBin(st);
 
     /* if ipmax < ipopt reset ipmax to ipopt */
@@ -806,71 +887,71 @@ static void optimisePurityBins(Settings *s, SurvTable *st, CalTable *ct)
 
     /* first bin */
     ipbin = 0;
-    purity[nbins++] = st->purity[ipbin];
+    predictor[nbins++] = st->predictor[ipbin];
 #if 0
-    display("1: nbins=%d ipbin=%d purity=%f\n", nbins, ipbin, st->purity[ipbin]);
+    display("1: nbins=%d ipbin=%d predictor=%f\n", nbins, ipbin, st->predictor[ipbin]);
 #endif
 
     if (ipopt > 0)
     {
         /* add n_bins_left bins between first bin and popt */
-        pinc = (st->purity[ipopt] - st->purity[0]) / (s->n_bins_left + 1);
+        pinc = (st->predictor[ipopt] - st->predictor[0]) / (s->n_bins_left + 1);
         for(i=0,j=1;i<s->n_bins_left;i++,j++)
         {
-            float p = st->purity[0] + j * pinc;
+            float p = st->predictor[0] + j * pinc;
             int ip = st->scale * (p - st->offset) + 0.5;
             if (ip == ipopt)
                 break;
             if (ip > ipbin) {
                 ipbin = ip;
-                purity[nbins++] = st->purity[ipbin];
+                predictor[nbins++] = st->predictor[ipbin];
 #if 0
-                display("2: nbins=%d ipbin=%d purity=%f\n", nbins, ipbin, st->purity[ipbin]);
+                display("2: nbins=%d ipbin=%d predictor=%f\n", nbins, ipbin, st->predictor[ipbin]);
 #endif
             }
         }
 
         /* add the optimal bin */
         ipbin = ipopt;
-        purity[nbins++] = st->purity[ipbin];
+        predictor[nbins++] = st->predictor[ipbin];
 #if 0
-        display("3: nbins=%d ipbin=%d purity=%f\n", nbins, ipbin, st->purity[ipbin]);
+        display("3: nbins=%d ipbin=%d predictor=%f\n", nbins, ipbin, st->predictor[ipbin]);
 #endif
     }
 
     if (ipmax > ipopt)
     {
         /* add n_bins_right bins between popt and pmax */
-        pinc = (st->purity[ipmax] - st->purity[ipopt]) / (s->n_bins_right + 1);
+        pinc = (st->predictor[ipmax] - st->predictor[ipopt]) / (s->n_bins_right + 1);
         for(i=0,j=1;i<s->n_bins_right;i++,j++)
         {
-            float p = st->purity[ipopt] + j * pinc;
+            float p = st->predictor[ipopt] + j * pinc;
             int ip = st->scale * (p - st->offset) + 0.5;
             if (ip == ipmax)
                 break;
             if (ip > ipbin) {
                 ipbin = ip;
-                purity[nbins++] = st->purity[ipbin];
+                predictor[nbins++] = st->predictor[ipbin];
 #if 0
-                display("4: nbins=%d ipbin=%d purity=%f\n", nbins, ipbin, st->purity[ipbin]);
+                display("4: nbins=%d ipbin=%d predictor=%f\n", nbins, ipbin, st->predictor[ipbin]);
 #endif
             }
         }
 
         /* add pmax */
         ipbin = ipmax;
-        purity[nbins++] = st->purity[ipbin];
+        predictor[nbins++] = st->predictor[ipbin];
 #if 0
-        display("5: nbins=%d ipbin=%d purity=%f\n", nbins, ipbin, st->purity[ipbin]);
+        display("5: nbins=%d ipbin=%d predictor=%f\n", nbins, ipbin, st->predictor[ipbin]);
 #endif
     }
 
-    /* add another bin if pmax is not the maximum possible purity value */
-    if (ipmax < 75)
-        purity[nbins++] = st->purity[75];
+    /* add another bin if pmax is not the maximum possible predictor value */
+    if (ipmax < (st->nbins-1))
+        predictor[nbins++] = st->predictor[st->nbins-1];
 #if 0
-    if (ipmax < 75)
-        display("6: nbins=%d ipbin=%d purity=%f\n", nbins, 75, st->purity[75]);
+    if (ipmax < (st->nbins-1))
+        display("6: nbins=%d ipbin=%d predictor=%f\n", nbins, st->nbins-1, st->predictor[st->nbins-1]);
 #endif
 
     /* move data into the new set of bins */
@@ -879,7 +960,7 @@ static void optimisePurityBins(Settings *s, SurvTable *st, CalTable *ct)
 
     for(i=0;i<ct->nbins;i++)
     {
-        ct->purity[i] = purity[i];
+        ct->predictor[i] = predictor[i];
         ct->num_bases[i]  = 0;
         ct->num_errors[i] = 0;
     }
@@ -888,7 +969,7 @@ static void optimisePurityBins(Settings *s, SurvTable *st, CalTable *ct)
     {
         for(j=0;j<ct->nbins;j++)
         {
-            if(st->purity[i] <= ct->purity[j])
+            if(st->predictor[i] <= ct->predictor[j])
             {
                 ct->num_bases[j]  += st->num_bases[i];
                 ct->num_errors[j] += st->num_errors[i];
@@ -927,7 +1008,7 @@ static int makeCalTable(Settings *s, SurvTable **sts, CalTable **cts)
 
                 initialiseCalTable(st, ct);
 
-                optimisePurityBins(s, st, ct);
+                optimisePredictorBins(s, st, ct);
 
                 for(i=0;i<ct->nbins;i++)
                 {
@@ -943,23 +1024,8 @@ static int makeCalTable(Settings *s, SurvTable **sts, CalTable **cts)
 
 static void outputCalTable(Settings *s, CalTable **cts)
 {
-    FILE *fp;
-    int filename_sz;
-    char *filename;
+    FILE *fp = NULL;
     int itile, read, cycle, i;
-
-    filename_sz = (NULL == s->prefix ? 0 : strlen(s->prefix)) + 100;
-    filename = smalloc(filename_sz);
-
-    sprintf(filename, "%s_purity_cycle_caltable.txt", s->prefix);
-    fp = fopen(filename, "w");
-    if (NULL == fp) {
-        fprintf(stderr, "ERROR: can't open CT file %s: %s\n",
-                filename, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-
-    free(filename);
 
     for(itile=0;itile<=N_TILES;itile++)
         for(read=0;read<N_READS;read++)
@@ -972,14 +1038,31 @@ static void outputCalTable(Settings *s, CalTable **cts)
                 // skip ct with no bins
                 if( 0 == ct->nbins ) continue;
 
+                if( NULL == fp )
+                {
+                    int filename_sz;
+                    char *filename;
+                    filename_sz = (NULL == s->prefix ? 0 : strlen(s->prefix)) + 100;
+                    filename = smalloc(filename_sz);
+                    sprintf(filename, "%s_%s_cycle_caltable.txt", s->prefix, (ct->mode == ST_MODE_PURITY ? "purity" : "quality"));
+                    fp = fopen(filename, "w");
+                    if( NULL == fp )
+                    {
+                        fprintf(stderr, "ERROR: can't open CT file %s: %s\n",
+                                filename, strerror(errno));
+                        exit(EXIT_FAILURE);
+                    }
+                    free(filename);
+                }
+
                 for(i=0;i<ct->nbins;i++)
                 {
-                    /* exclude empty bins except for purity=0.25 and purity=1.0 */
-                    if( ct->num_bases[i] == 0 && ( ct->purity[i] > 0.25 && ct->purity[i] < 1.0 ))
+                    /* always output the first and last bin but exclude all other empty bins */
+                    if( ct->num_bases[i] == 0 && i > 0 && i < (ct->nbins-1) )
                         continue;
 
                     fprintf(fp, "%f\t%d\t%d\t%d\t%5ld\t%5ld\t%f\t%f\t%f\n",
-                            ct->purity[i], ct->read, ct->cycle, ct->tile,
+                            ct->predictor[i], ct->read, ct->cycle, ct->tile,
                             ct->num_bases[i], ct->num_errors[i], ct->frac_bases[i],
                             ct->error_rate[i], ct->quality[i]);
                 }
@@ -1028,27 +1111,22 @@ static int updateSurvTable(Settings *s, SurvTable **sts, CifData *cif_data,
     int iregion = -1;
     int c, b;
 
-    assert((cstart + read_length) <= cif_data->ncycles);
+    if (NULL != cif_data) assert((cstart + read_length) <= cif_data->ncycles);
 
     if (s->spatial_filter) iregion = xy2region(x, y, s->region_size, s->nregions_x, s->nregions_y);
 
 #ifdef CALDATA
-    {
-        int dir = BAM_FREVERSE & bam->core.flag ? 1 : 0;
-        char *chrom = fp->header->target_name[bam->core.tid];
-        int pos = bam->core.pos;
+    int dir = BAM_FREVERSE & bam->core.flag ? 1 : 0;
+    char *chrom = fp->header->target_name[bam->core.tid];
+    int pos = bam->core.pos;
 
-        fprintf(fp_caldata, "%d\t%d\t%d\t%s\t%d\t", x, y, dir, chrom, pos);
-    }
+    fprintf(fp_caldata, "%d\t%d\t%d\t%s\t%d\t", x, y, dir, chrom, pos);
 #endif
 
     /* update survival table */
     for (c = cstart, b = 0; b < read_length; c++, b++) {
-        CifCycleData *cycle = cif_data->cycles + c;
         SurvTable *st;
-        int channel;
-        int bin[cycle->num_channels];
-        float purity = -1.0;
+        float predictor = -1.0;
         int ibin;
 
         /* set cycle st */
@@ -1059,36 +1137,70 @@ static int updateSurvTable(Settings *s, SurvTable **sts, CifData *cif_data,
             st = sts[read] + b;
         }
 
-        read_cif_chunk(cycle, spot_num);
-        for (channel = 0; channel < cycle->num_channels; channel++) {
-            size_t base_pos = spot_num - cycle->chunk_start;
-            switch (cycle->data_type) {
-            case 1:
-                bin[channel] = cycle->chan_data[channel].i8[base_pos];
-                break;
-            case 2:
-                bin[channel] = cycle->chan_data[channel].i16[base_pos];
-                break;
-            case 4:
-                bin[channel] = cycle->chan_data[channel].i32[base_pos];
-                if (bin[channel] > 65535) {
-                    bin[channel] = 65535;
-                } else if (bin[channel] < -65535) {
-                    bin[channel] = -65535;
+        if (st->mode == ST_MODE_PURITY) {
+            CifCycleData *cycle = cif_data->cycles + c;
+            int channel;
+            int bin[cycle->num_channels];
+
+            read_cif_chunk(cycle, spot_num);
+            for (channel = 0; channel < cycle->num_channels; channel++) {
+                size_t base_pos = spot_num - cycle->chunk_start;
+                switch (cycle->data_type) {
+                case 1:
+                    bin[channel] = cycle->chan_data[channel].i8[base_pos];
+                    break;
+                case 2:
+                    bin[channel] = cycle->chan_data[channel].i16[base_pos];
+                    break;
+                case 4:
+                    bin[channel] = cycle->chan_data[channel].i32[base_pos];
+                    if (bin[channel] > 65535) {
+                        bin[channel] = 65535;
+                    } else if (bin[channel] < -65535) {
+                        bin[channel] = -65535;
+                    }
+                    break;
+                default:
+                    abort();
                 }
-                break;
-            default:
-                abort();
             }
+
+            predictor = GetPu(cycle->num_channels, bin);
+
+#ifdef CHECK_BASECALL
+            int Imax = bin[0];
+            int i;
+            for (i=1; i<cycle->num_channels; i++)
+                if(Imax <= bin[i])
+                    Imax = bin[i];
+            if (Imax > 0 ){
+                char bases[] = "ACGTN", flags[] = "    ";
+                for (i=0; i<cycle->num_channels; i++)
+                {
+                    flags[i] = ' ';
+                    if(bin[i] == Imax)
+                    {
+                        flags[i] = '*';
+                        if(read_seq[b] == bases[i])
+                            break;
+                    }
+                }
+                if( i == cycle->num_channels )
+                    fprintf(stderr,"%lu %d %d %d %c %c %d %d%c %d%c %d%c %d%c %f\n", spot_num, x, y, c, read_ref[b], read_seq[b], read_qual[b],
+                            bin[0], flags[0], bin[1], flags[1], bin[2], flags[2], bin[3], flags[3], predictor);
+            }
+#endif
+
+        } else {
+            predictor = read_qual[b];
         }
-
-        purity = GetPu(cycle->num_channels, bin);
-
-        ibin = st->scale * (purity - st->offset) + 0.5;
+        
+        ibin = st->scale * (predictor - st->offset) + 0.5;
+        if( ibin >= st->nbins ) ibin=(st->nbins-1);
 
         if( read_mismatch[b] & BASE_KNOWN_SNP ) {
             // don't count these
-        } else{
+        } else {
             if( read_mismatch[b] & BASE_ALIGN )
                 st->num_bases[ibin]++;
             if( read_mismatch[b] & BASE_MISMATCH )
@@ -1109,57 +1221,43 @@ static int updateSurvTable(Settings *s, SurvTable **sts, CifData *cif_data,
                 cntxt[1]=read_ref[b];
                 cntxt[2]=read_seq[b];
                 word=str2word(cntxt,LEN_CNTXT);
-                if( word >= 0 )
+                if( word >= 0 ) 
                     st->cntxt[word][ibin]++;
+
+                if( word >= 0 && b >= LEN_HOMOP ){
+                    int l;
+                    for(l=1; l<=LEN_HOMOP; l++)
+                        if( read_ref[b-l] != cntxt[0] )
+                            break;
+                    if( l > LEN_HOMOP)
+                        st->homop[word][ibin]++;
+                }
             }
 #endif
         }
 
 #ifdef CALDATA
-        {
-            char bases[] = "ACGTNDIS";
-            char base = strchr(bases, read_seq[b]);
-            int seq_base, ref_base;
+        char bases[] = "ACGTNDIS";
+        char base = strchr(bases, read_seq[b]);
+        int seq_base, ref_base;
 
-            if( NULL == base ){
-                fprintf(stderr, "Unknown base %c\n", read_seq[b]);
-                exit(EXIT_FAILURE);
-            }
-            seq_base = base - bases + 1;
-            base = strchr(bases, read_ref[b]);
-            if( NULL == base ){
-                fprintf(stderr, "Unknown ref %c\n", read_ref[b]);
-                exit(EXIT_FAILURE);
-            }
-            ref_base = base - bases + 1;
+        if( NULL == base ){
+            fprintf(stderr, "Unknown base %c\n", read_seq[b]);
+            exit(EXIT_FAILURE);
+        }
+        seq_base = base - bases + 1;
+        base = strchr(bases, read_ref[b]);
+        if( NULL == base ){
+            fprintf(stderr, "Unknown ref %c\n", read_ref[b]);
+            exit(EXIT_FAILURE);
+        }
+        ref_base = base - bases + 1;
+        if( st->mode == ST_MODE_PURITY ){
             fprintf(fp_caldata, "%d %d %d %d %d %d %d %d\t",
                     ref_base, seq_base, read_qual[b], bin[0], bin[1], bin[2], bin[3], read_mismatch[b]);
-        }
-#endif
-
-#ifdef CHECK_BASECALL
-        {
-            int Imax = bin[0];
-            int i;
-            for (i=1; i<cycle->num_channels; i++)
-                if(Imax <= bin[i])
-                    Imax = bin[i];
-            if (Imax > 0 ){
-                char bases[] = "ACGTN", flags[] = "    ";
-                for (i=0; i<cycle->num_channels; i++)
-                {
-                    flags[i] = ' ';
-                    if(bin[i] == Imax)
-                    {
-                        flags[i] = '*';
-                        if(read_seq[b] == bases[i])
-                            break;
-                    }
-                }
-                if( i == cycle->num_channels )
-                    fprintf(stderr,"%lu %d %d %d %c %c %d %d%c %d%c %d%c %d%c %f\n", spot_num, x, y, c, read_ref[b], read_seq[b], read_qual[b],
-                            bin[0], flags[0], bin[1], flags[1], bin[2], flags[2], bin[3], flags[3], purity);
-            }
+        } else {
+            fprintf(fp_caldata, "%d %d %d %d\t",
+                    ref_base, seq_base, read_qual[b], biread_mismatch[b]);
         }
 #endif
 
@@ -1209,7 +1307,7 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
 
     bam1_t *bam = bam_init1();
 
-    checked_chdir(s->intensity_dir);
+    if (NULL != s->intensity_dir) checked_chdir(s->intensity_dir);
 
     for(itile=0;itile<=N_TILES;itile++)
         for(read=0;read<N_READS;read++)
@@ -1227,7 +1325,7 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
         size_t bam_offset = 0;
         int cycle;
 
-        if (parse_bam_readinfo(fp_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, &bam_offset)) {
+        if (parse_bam_readinfo(fp_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, (NULL == s->intensity_dir ? NULL : &bam_offset))) {
             break;	/* break on end of BAM file */
 		}
 
@@ -1280,44 +1378,49 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
         }
 
         if( bam_tile != tile ){
+   	    size_t nelem = ntiles_bam;
+	    void *pitile;
+
             tile = bam_tile;
             
-            if (!s->quiet)fprintf(stderr, "Processing tile %i (%d)\n", tile, nreads_bam);
-
-            /* Look for processed trace data */
-
-            if (NULL != cif_data) free_cif_data(cif_data);
-            cif_data = load_cif_data(lane, tile, "dif");
-
-            /* Check that we actually got some trace data */
-            if (NULL == cif_data) {
-                fprintf(stderr, "Error: no intensity files found for lane %i tile %i.\n", lane, tile);
-                exit(EXIT_FAILURE);
-            }
-
-            if(ncycles_firecrest == -1) {
-                ncycles_firecrest = cif_data->ncycles;
-            } else if(cif_data->ncycles != ncycles_firecrest){
-                fprintf(stderr,
-                        "ERROR: %lu intensity cycles for tile %i"
-                        "with %i cycles expected.\n",
-                        cif_data->ncycles, tile, ncycles_firecrest);
-                exit(EXIT_FAILURE);
-            }
-
-            for (itile=0; itile<ntiles_bam; itile++)
-                if (tile == tiles[itile]) {
+	    pitile = lfind(&tile, tiles, &nelem, sizeof(int), &tile_cmp);
+	    if (NULL == pitile) {
+                itile = ntiles_bam;
+                if(++ntiles_bam > N_TILES){
+                    fprintf(stderr,"ERROR: too many tiles %d > %d.\n", ntiles_bam, N_TILES);
+                    exit(EXIT_FAILURE);
+                }
+                tiles[itile] = tile;
+                if (!s->quiet)fprintf(stderr, "Processing tile %i (%d)\n", tile, nreads_bam);
+            }else{
+                if( NULL != s->intensity_dir ) {
                     fprintf(stderr,"ERROR: alignments are not sorted by tile.\n");
                     exit(EXIT_FAILURE);
                 }
-
-            ntiles_bam++;
-            if(ntiles_bam > N_TILES){
-                fprintf(stderr,"ERROR: too many tiles %d > %d.\n", ntiles_bam, N_TILES);
-                exit(EXIT_FAILURE);
+   	        itile = ((int*)pitile - tiles);
             }
+            
+            if ( NULL != s->intensity_dir) {
+                /* Look for processed trace data */
+                if (NULL != cif_data) free_cif_data(cif_data);
+                cif_data = load_cif_data(lane, tile, "dif");
+            
+                /* Check that we actually got some trace data */
+                if (NULL == cif_data) {
+                    fprintf(stderr, "Error: no intensity files found for lane %i tile %i.\n", lane, tile);
+                    exit(EXIT_FAILURE);
+                }
 
-            tiles[itile] = tile;
+                if(ncycles_firecrest == -1) {
+                    ncycles_firecrest = cif_data->ncycles;
+                } else if(cif_data->ncycles != ncycles_firecrest){
+                    fprintf(stderr,
+                            "ERROR: %lu intensity cycles for tile %i"
+                            "with %i cycles expected.\n",
+                            cif_data->ncycles, tile, ncycles_firecrest);
+                    exit(EXIT_FAILURE);
+                }
+            }
 
 #ifdef CALDATA
             if (NULL != fp_caldata) fclose(fp_caldata);
@@ -1341,7 +1444,6 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
             }
         }
         
-
         if (0 != updateSurvTable(s, (s->spatial_filter ? sts : &sts[itile*N_READS]), cif_data,
                                  bam_offset, bam_tile, bam_x, bam_y, bam_read, bam_read_mismatch,
                                  bam_read_seq, bam_read_qual, bam_read_ref, fp_bam, bam, fp_caldata)) {
@@ -1410,10 +1512,10 @@ void usage(int code) {
     fprintf(usagefp, "             intensity cycle number of first base of read 2 in paired-end bam file\n");
     fprintf(usagefp, "               no default\n");
     fprintf(usagefp, "    -nL nbins\n");
-    fprintf(usagefp, "               number of purity bins between purity 0.25 and optimal cut\n");
+    fprintf(usagefp, "               number of bins between minimum predictor and optimal predictor\n");
     fprintf(usagefp, "                 default 2\n");
     fprintf(usagefp, "    -nR nbins\n");
-    fprintf(usagefp, "               number of purity bins between optimal cut and qmax\n");
+    fprintf(usagefp, "               number of bins between optimal predictor and qmax\n");
     fprintf(usagefp, "                 default 2\n");
     fprintf(usagefp, 
             "    -q       Quiet \n");
@@ -1591,9 +1693,9 @@ int main(int argc, char **argv) {
                     override_intensity_dir);
             exit(EXIT_FAILURE);
         }
+        fprintf(stderr,"Building purity cycle calibration table\n");
     } else {
-        fprintf(stderr,"ERROR: you must specify an intensity dir\n");
-        exit(EXIT_FAILURE);
+        fprintf(stderr,"Building quality cycle calibration table\n");
     }
 
     /* read the snp_file */
@@ -1619,7 +1721,9 @@ int main(int argc, char **argv) {
     }
 
     /* Look for CIF directories */
-    get_cif_dirs(settings.intensity_dir);
+    if (NULL != settings.intensity_dir) {
+        get_cif_dirs(settings.intensity_dir);
+    }
 
     /* open the bam file */
     bam_file = argv[i++];
