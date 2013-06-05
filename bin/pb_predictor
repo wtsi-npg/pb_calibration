@@ -82,11 +82,6 @@ initialise ()
         exit 1
     fi
 
-    if [ -z $intensity_dir ] ; then
-        echo "You must supply an intensity_dir" >&2
-        exit 1
-    fi
-
     if [ -z $cstart ] && ( [ -z $cstart1 ] || [ -z $cstart2 ] ) ; then
         echo "You must supply cstart OR cstart1 and cstart2" >&2
         exit 1
@@ -111,11 +106,15 @@ if [ ! -s $bam ] ; then
     exit 1
 fi
 
-if [ ! -d $intensity_dir ] ; then
-    echo "Intensity directory $intensity_dir does not exist" >&2
-    exit 1
-fi
-echo "intensity directory $intensity_dir" >&2
+if [ $intensity_dir ] ; then
+    if [ ! -d $intensity_dir ] ; then
+        echo "Intensity directory $intensity_dir does not exist" >&2
+        exit 1
+    fi
+    echo "intensity directory $intensity_dir" >&2
+else
+    echo "No intensity directory" >&2
+fi    
 
 if [ $ct ] ; then
     if [ ! -s $ct ] ; then
@@ -126,7 +125,11 @@ fi
 
 echo "Recalibrating..." >&2
 
-parms="-intensity-dir $intensity_dir -ct $ct"
+parms="-ct $ct"
+
+if [ $intensity_dir ] ; then
+  parms="$parms -intensity-dir $intensity_dir"
+fi
 
 if [ $filter ] ; then
     parms="$parms -filter_file $filter"
