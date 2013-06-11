@@ -1362,7 +1362,7 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
                     "within bam file for read %d.\n"
                     "have length %ld, previously it was %d.\n",
                     bam_read, (long) read_length, s->read_length[bam_read]);
-            exit(-1);
+            exit(EXIT_FAILURE);
         }
 
         if (lane == -1) {
@@ -1374,7 +1374,7 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
                     "within bam file.\n"
                     "have %d, previously it was %d.\n",
                     bam_lane, lane);
-            exit(-1);
+            exit(EXIT_FAILURE);
         }
 
         if( bam_tile != tile ){
@@ -1388,14 +1388,14 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
                 itile = ntiles_bam;
                 if(++ntiles_bam > N_TILES){
                     fprintf(stderr,"ERROR: too many tiles %d > %d.\n", ntiles_bam, N_TILES);
-                    exit(-1);
+                    exit(EXIT_FAILURE);
                 }
                 tiles[itile] = tile;
                 if (!s->quiet)fprintf(stderr, "Processing tile %i (%d)\n", tile, nreads_bam);
             }else{
                 if( NULL != s->intensity_dir ) {
                     fprintf(stderr,"ERROR: alignments are not sorted by tile.\n");
-                    exit(-1);
+                    exit(EXIT_FAILURE);
                 }
    	        itile = ((int*)pitile - tiles);
             }
@@ -1408,7 +1408,7 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
                 /* Check that we actually got some trace data */
                 if (NULL == cif_data) {
                     fprintf(stderr, "Error: no intensity files found for lane %i tile %i.\n", lane, tile);
-                    exit(-1);
+                    exit(EXIT_FAILURE);
                 }
 
                 if(ncycles_firecrest == -1) {
@@ -1418,7 +1418,7 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
                             "ERROR: %lu intensity cycles for tile %i"
                             "with %i cycles expected.\n",
                             cif_data->ncycles, tile, ncycles_firecrest);
-                    exit(-1);
+                    exit(EXIT_FAILURE);
                 }
             }
 
@@ -1429,7 +1429,7 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
             if (NULL == fp_caldata) {
                 fprintf(stderr, "ERROR: can't open caldata file %s: %s\n",
                         filename, strerror(errno));
-                exit(-1);
+                exit(EXIT_FAILURE);
             }
 #endif            
         }
@@ -1448,7 +1448,7 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
                                  bam_offset, bam_tile, bam_x, bam_y, bam_read, bam_read_mismatch,
                                  bam_read_seq, bam_read_qual, bam_read_ref, fp_bam, bam, fp_caldata)) {
             fprintf(stderr,"ERROR: updating quality values for tile %i.\n", tile);
-            exit(-1);
+            exit(EXIT_FAILURE);
         }
         
         nreads_bam++;
@@ -1736,10 +1736,6 @@ int main(int argc, char **argv) {
 
     /* make the survival table */
     nst = makeSurvTable(&settings, fp_bam, sts, &ntiles, &nreads);
-    if (-1 == nst) {
-        fprintf(stderr,"ERROR: failed to make survival table\n");
-        exit(EXIT_FAILURE);
-    }
     if (0 == nst) {
         fprintf(stderr,"WARNING: No data in BAM file\n");
         exit(EXIT_SUCCESS);
