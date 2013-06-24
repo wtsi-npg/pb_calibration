@@ -595,7 +595,9 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
 {
     FILE *fp = NULL;
     int read, cycle, i, j;
+    char p;
 
+    // open error file
     for(read=0;read<N_READS;read++)
     {
         if( NULL == sts[ntiles*N_READS+read]) continue;
@@ -616,26 +618,51 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
                 fp = fopen(filename, "w");
                 if( NULL == fp )
                 {
-                    fprintf(stderr, "ERROR: can't open CT file %s: %s\n",
+                    fprintf(stderr, "ERROR: can't open Error file %s: %s\n",
                             filename, strerror(errno));
                     exit(EXIT_FAILURE);
                 }
                 free(filename);
             }
+        }
+    }
+    if( NULL == fp )
+    {
+        fprintf(stderr, "ERROR: no error data\n");
+        exit(EXIT_FAILURE);
+    }
 
-            // mimsmatch Subs H (per cycle): MSH
-            fprintf(fp, "#MSL\t%d\t%d", read, cycle);
+    fprintf(fp, "# Substitution error table. Use `grep ^SET | cut -f 2-` to extract this part\n");
+    fprintf(fp, "# One row per predictor, columns read, predictor followed by substitution and count for 12 substitutions\n");
+    for(read=0;read<N_READS;read++)
+    {
+        SurvTable *st = sts[(N_TILES+1)*N_READS+read];
+        if( NULL == st) continue;
+
+        for(i=0;i<st->nbins;i++)
+        {
+            fprintf(fp, "SET\t%d\t%.2f", read, st->predictor[i]);
             for (j=0;j<NUM_SUBST;j++)
             {
                 char *subst;
                 subst=word2str(j,LEN_SUBST);
                 if (subst[0]==subst[1]) continue;
-                fprintf(fp, "\t%s\t%ld", subst, st->substL[j]);
+                fprintf(fp, "\t%s\t%ld", subst, st->subst[j][i]);
             }
             fprintf(fp, "\n");
-
-            // mimsmatch Subs L (per cycle): MSL
-            fprintf(fp, "#MSH\t%d\t%d", read, cycle);
+        }
+    }
+    
+    fprintf(fp, "# Mismatch substitutions high predictor. Use `grep ^MSH | cut -f 2-` to extract this part\n");
+    fprintf(fp, "# One row per read and cycle, columns read, cycle then substitution and count for 12 substitutions\n");
+    for(read=0;read<N_READS;read++)
+    {
+        if( NULL == sts[ntiles*N_READS+read]) continue;
+        for(cycle=0;cycle<s->read_length[read];cycle++)
+        {
+            SurvTable *st = sts[ntiles*N_READS+read] + cycle;
+            if( 0 == st->total_bases ) continue;
+            fprintf(fp, "MSH\t%d\t%d", read, cycle);
             for (j=0;j<NUM_SUBST;j++)
             {
                 char *subst;
@@ -647,27 +674,35 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
         }
     }
 
+    fprintf(fp, "# Mismatch substitutions low predictor. Use `grep ^MSL | cut -f 2-` to extract this part\n");
+    fprintf(fp, "# One row per read and cycle, columns read, cycle then substitution and count for 12 substitutions\n");
     for(read=0;read<N_READS;read++)
     {
-        SurvTable *st = sts[(N_TILES+1)*N_READS+read];
-        if( NULL == st) continue;
-
-        // substitution error tables (curves) per predictor : SET
-        for(i=0;i<st->nbins;i++)
+        if( NULL == sts[ntiles*N_READS+read]) continue;
+        for(cycle=0;cycle<s->read_length[read];cycle++)
         {
-            fprintf(fp, "#SET\t%d\t%.2f", read, st->predictor[i]);
+            SurvTable *st = sts[ntiles*N_READS+read] + cycle;
+            if( 0 == st->total_bases ) continue;
+            fprintf(fp, "MSL\t%d\t%d", read, cycle);
             for (j=0;j<NUM_SUBST;j++)
             {
                 char *subst;
                 subst=word2str(j,LEN_SUBST);
                 if (subst[0]==subst[1]) continue;
-                fprintf(fp, "\t%s\t%ld", subst, st->subst[j][i]);
+                fprintf(fp, "\t%s\t%ld", subst, st->substL[j]);
             }
             fprintf(fp, "\n");
         }
+    }
 
-        // substitution profile H : PRH
-        fprintf(fp, "#PRH\t%d", read);
+    fprintf(fp, "# Substitution profile high predictor. Use `grep ^PRH | cut -f 2-` to extract this part\n");
+    fprintf(fp, "# One row per read, columns read then substitution and count for 12 substitutions\n");
+    for(read=0;read<N_READS;read++)
+    {
+        SurvTable *st = sts[(N_TILES+1)*N_READS+read];
+        if( NULL == st) continue;
+
+        fprintf(fp, "PRH\t%d", read);
         for (j=0;j<NUM_SUBST;j++)
         {
             char *subst;
@@ -676,9 +711,16 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
             fprintf(fp, "\t%s\t%ld", subst, st->substH[j]);
         }
         fprintf(fp, "\n");
+    }
+    
+    fprintf(fp, "# Substitution profile low predictor. Use `grep ^PRL | cut -f 2-` to extract this part\n");
+    fprintf(fp, "# One row per read, columns read then substitution and count for 12 substitutions\n");
+    for(read=0;read<N_READS;read++)
+    {
+        SurvTable *st = sts[(N_TILES+1)*N_READS+read];
+        if( NULL == st) continue;
 
-        // substitution profile L : PRL
-        fprintf(fp, "#PRL\t%d", read);
+        fprintf(fp, "PRL\t%d", read);
         for (j=0;j<NUM_SUBST;j++)
         {
             char *subst;
@@ -687,10 +729,15 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
             fprintf(fp, "\t%s\t%ld", subst, st->substL[j]);
         }
         fprintf(fp, "\n");
+    }
+    
+    fprintf(fp, "# Effect of previous base high predictor. Use `grep ^P1H | cut -f 2-` to extract this part\n");
+    fprintf(fp, "# One row per read and previous base, columns read then previous base+substitution and count for 12 substitutions\n");
+    for(read=0;read<N_READS;read++)
+    {
+        SurvTable *st = sts[(N_TILES+1)*N_READS+read];
+        if( NULL == st) continue;
 
-        char p;
-
-        // previous one nucleotide effect H : P1H
         for (j=0,p='\0';j<NUM_CNTXT;j++)
         {
             char *cntxt;
@@ -698,14 +745,21 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
             if (p != cntxt[0]) {
                 p = cntxt[0];
                 if (j) fprintf(fp, "\n");
-                fprintf(fp, "#P1H\t%d", read);
+                fprintf(fp, "P1H\t%d", read);
             }
             if (cntxt[1]==cntxt[2]) continue;
             fprintf(fp, "\t%s\t%ld", cntxt, st->cntxtH[j]);
         }
         fprintf(fp, "\n");
+    }
+    
+    fprintf(fp, "# Effect of previous base low predictor. Use `grep ^P1L | cut -f 2-` to extract this part\n");
+    fprintf(fp, "# One row per read and previous base, columns read then previous base+substitution and count for 12 substitutions\n");
+    for(read=0;read<N_READS;read++)
+    {
+        SurvTable *st = sts[(N_TILES+1)*N_READS+read];
+        if( NULL == st) continue;
 
-        // previous one nucleotide effect L : P1L
         for (j=0, p='\0';j<NUM_CNTXT;j++)
         {
             char *cntxt;
@@ -713,14 +767,21 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
             if (p != cntxt[0]) {
                 p = cntxt[0];
                 if (j) fprintf(fp, "\n");
-                fprintf(fp, "#P1L\t%d", read);
+                fprintf(fp, "P1L\t%d", read);
             }
             if (cntxt[1]==cntxt[2]) continue;
             fprintf(fp, "\t%s\t%ld", cntxt, st->cntxtL[j]);
         }
         fprintf(fp, "\n");
+    }
+    
+    fprintf(fp, "# Homopolymer effect high predictor. Use `grep ^HPH | cut -f 2-` to extract this part\n");
+    fprintf(fp, "# One row per read and homopolymer, columns read then homopolymer+substitution and count for 12 substitutions\n");
+    for(read=0;read<N_READS;read++)
+    {
+        SurvTable *st = sts[(N_TILES+1)*N_READS+read];
+        if( NULL == st) continue;
 
-        // homopolymer effect H : HPH
         for (j=0,p='\0';j<NUM_CNTXT;j++)
         {
             int k;
@@ -730,7 +791,7 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
             if (p != cntxt[0]) {
                 p = cntxt[0];
                 if (j) fprintf(fp, "\n");
-                fprintf(fp, "#HPH\t%d", read);
+                fprintf(fp, "HPH\t%d", read);
             }
             if (cntxt[1]==cntxt[2]) continue;
             for (k=0;k<(LEN_HOMOP-1);k++)
@@ -739,8 +800,15 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
             fprintf(fp, "\t%s%s\t%ld", homop, cntxt, st->homopH[j]);
         }
         fprintf(fp, "\n");
+    }
+    
+    fprintf(fp, "# Homopolymer effect low predictor. Use `grep ^HPL | cut -f 2-` to extract this part\n");
+    fprintf(fp, "# One row per read and homopolymer, columns read then homopolymer+substitution and count for 12 substitutions\n");
+    for(read=0;read<N_READS;read++)
+    {
+        SurvTable *st = sts[(N_TILES+1)*N_READS+read];
+        if( NULL == st) continue;
 
-        // homopolymer effect L : HPL
         for (j=0,p='\0';j<NUM_CNTXT;j++)
         {
             int k;
@@ -750,7 +818,7 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
             if (p != cntxt[0]) {
                 p = cntxt[0];
                 if (j) fprintf(fp, "\n");
-                fprintf(fp, "#HPL\t%d", read);
+                fprintf(fp, "HPL\t%d", read);
             }
             if (cntxt[1]==cntxt[2]) continue;
             for (k=0;k<(LEN_HOMOP-1);k++)
@@ -761,7 +829,7 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
         fprintf(fp, "\n");
     }
     
-    fclose(fp);
+    if( NULL != fp) fclose(fp);
 }
 #endif
 
@@ -805,7 +873,7 @@ static void outputSurvTable(Settings *s, SurvTable **sts)
             }
         }
 
-    fclose(fp);
+    if( NULL != fp) fclose(fp);
 }
 
 static void initialiseCalTable(SurvTable *st, CalTable *ct)
@@ -1069,7 +1137,7 @@ static void outputCalTable(Settings *s, CalTable **cts)
             }
         }
 
-    fclose(fp);
+    if( NULL != fp) fclose(fp);
 }
 
 ////////////////////////////////////////////////////
@@ -1737,8 +1805,8 @@ int main(int argc, char **argv) {
     /* make the survival table */
     nst = makeSurvTable(&settings, fp_bam, sts, &ntiles, &nreads);
     if (0 == nst) {
-        fprintf(stderr,"ERROR: failed to make survival table\n");
-        exit(EXIT_FAILURE);
+        fprintf(stderr,"WARNING: No data in BAM file\n");
+        exit(EXIT_SUCCESS);
     }
 
     if (!settings.quiet) {
