@@ -1451,7 +1451,7 @@ int makeSurvTable(Settings *s, samfile_t *fp_bam, SurvTable **sts, int *ntiles, 
 
             tile = bam_tile;
             
-	    pitile = lfind(&tile, tiles, &nelem, sizeof(int), &tile_cmp);
+	    pitile = lfind(&tile, tiles, &nelem, sizeof(int), &int_cmp);
 	    if (NULL == pitile) {
                 itile = ntiles_bam;
                 if(++ntiles_bam > N_TILES){
