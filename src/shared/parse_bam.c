@@ -24,8 +24,7 @@ int parse_bam_readinfo( samfile_t *fp,
                     size_t *bam_offset) 
 {
 
-    char *name;
-    const char *sep = ":#/";
+    const char* const sep = ":#/";
     uint8_t *ci_ptr;
     int lane, tile, x, y, read;
 	int offset;
@@ -37,7 +36,7 @@ int parse_bam_readinfo( samfile_t *fp,
     x = -1;
     y = -1;
 
-    name = bam1_qname(bam);
+    const char* const name = bam1_qname(bam);
     const char *cp = name;
     /* let's find the beginning of the last 4 subfields of name separated by ':' */
     const char *c_subfield_p[4] = {name, name, name, name};
