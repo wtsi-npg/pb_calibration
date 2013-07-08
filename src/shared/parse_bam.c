@@ -26,8 +26,7 @@ int parse_bam_readinfo( samfile_t *fp,
 
     char *name;
     const char *sep = ":#/";
-    const char *cp;
-	uint8_t *ci_ptr;
+    uint8_t *ci_ptr;
     int lane, tile, x, y, read;
 	int offset;
 
@@ -39,31 +38,38 @@ int parse_bam_readinfo( samfile_t *fp,
     y = -1;
 
     name = bam1_qname(bam);
-    cp = strchr(name,':');
-    if (NULL == cp) die("ERROR: Invalid run in name: \"%s\"\n",name);
-    cp++;
+    const char *cp = name;
+    /* let's find the beginning of the last 4 subfields of name separated by ':' */
+    const char *c_subfield_p[4] = {name, name, name, name};
+    int c_subfield_i = 0;
+    while (NULL != (cp = strchr(cp,':'))) {
+      c_subfield_p[c_subfield_i] = ++cp;
+      c_subfield_i++;
+      c_subfield_i %= 4;
+    }
+    cp = c_subfield_p[c_subfield_i];
     cp = parse_next_int(cp,&lane,sep);
     cp = parse_next_int(cp,&tile,sep);
     cp = parse_next_int(cp,&x,sep);
     cp = parse_next_int(cp,&y,sep);
 
-	if (bam_offset) {	/* look for offset, if we want it */
-		/* look for ci tag */
-		ci_ptr = bam_aux_get(bam, "ci");
-		if (NULL == ci_ptr) {
-			/* no ci tag get offset from name */
-			cp = parse_next_int(cp,&offset,sep);
-			if (NULL == cp) die("ERROR: No ci tag and no offset in name: \"%s\"\n",name);
-		} else {
-			offset = bam_aux2i(ci_ptr);
-			/* name offset is 0 based but ci is 1 based */
-			offset--;
-		}
-	}
+    if (bam_offset) {	/* look for offset, if we want it */
+      /* look for ci tag */
+      ci_ptr = bam_aux_get(bam, "ci");
+      if (NULL == ci_ptr) {
+        /* no ci tag get offset from name (cannot be spearated with a ':')*/
+        cp = parse_next_int(cp,&offset,sep);
+        if (NULL == cp) die("ERROR: No ci tag and no offset in name: \"%s\"\n",name);
+      } else {
+        offset = bam_aux2i(ci_ptr);
+        /* name offset is 0 based but ci is 1 based */
+        offset--;
+      }
+    }
 
-	if (lane < 1) die("ERROR: Invalid lane value in name: \"%s\"\n",name);
+    if (lane < 1) die("ERROR: Invalid lane value in name: \"%s\"\n",name);
 
-	if (tile <= 0) die("ERROR: Invalid tile value in name: \"%s\"\n",name);
+    if (tile <= 0) die("ERROR: Invalid tile value in name: \"%s\"\n",name);
 
     read = 0;
     if(BAM_FPAIRED & bam->core.flag){
