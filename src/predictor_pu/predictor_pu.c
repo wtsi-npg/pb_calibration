@@ -49,7 +49,7 @@
 /*
  * Author: Steven Leonard, Jan 2009
  *
- * This code applies a purity based calibration table
+ * This code applies a purity or quality based calibration table
  *
  */
 
@@ -100,9 +100,13 @@
 /* if we split data by state, using a filter file rather than tile, use tile as a place holder for state */
 #define N_STATES 2
 
+#define CT_MODE_PURITY  (1<<0)
+#define CT_MODE_QUALITY (1<<1)
+
 #define PHRED_QUAL_OFFSET 33  // phred quality values offset
 
 typedef struct {
+    int         mode;
     int         tile;
     int         read;
     int         cycle;
@@ -110,7 +114,7 @@ typedef struct {
     float       delta;
     float       scale;
     int         nbins;
-    float       *purity;
+    float       *predictor;
     long        *num_bases;
     long        *num_errors;
     float       *frac_bases;
@@ -133,32 +137,38 @@ typedef struct {
     char *working_dir;
 } Settings;
 
-static void initialiseCalTable(CalTable *ct, int tile, int read, int cycle)
+static void initialiseCalTable(CalTable *ct, int mode, int tile, int read, int cycle)
 {
-    int nbins = 76;
-    int nvals = 76;
-    int ival;
+    int i;
+
+    ct->mode = mode;
 
     ct->tile = tile;
     ct->read = read;
     ct->cycle = cycle;
 
-    ct->offset = 0.25;
-    ct->delta  = 0.01;
-    ct->scale  = 1.0 / ct->delta;
+    if (ct->mode == CT_MODE_PURITY) {
+        ct->nbins = 76;
+        ct->offset = 0.25;
+        ct->delta  = 0.01;
+        ct->scale  = 1.0 / ct->delta;
+    } else {
+        ct->nbins = 51;
+        ct->offset = 0.0;
+        ct->delta  = 1.0;
+        ct->scale  = 1.0 / ct->delta;
+    }
 
-    ct->purity = smalloc(nbins * sizeof(float));
-    ct->num_bases = smalloc(nbins * sizeof(long));
-    ct->num_errors = smalloc(nbins * sizeof(long));
-    ct->frac_bases = smalloc(nbins * sizeof(float));
-    ct->error_rate = smalloc(nbins * sizeof(float));
-    ct->quality = smalloc(nbins * sizeof(float));
+    ct->predictor = smalloc(ct->nbins * sizeof(float));
+    ct->num_bases = smalloc(ct->nbins * sizeof(long));
+    ct->num_errors = smalloc(ct->nbins * sizeof(long));
+    ct->frac_bases = smalloc(ct->nbins * sizeof(float));
+    ct->error_rate = smalloc(ct->nbins * sizeof(float));
+    ct->quality = smalloc(ct->nbins * sizeof(float));
 
-    ct->ibin = smalloc(nvals * sizeof(int));
-    for(ival=0;ival<nvals;ival++)
-        ct->ibin[ival] = -1;
-
-    ct->nbins = 0;
+    ct->ibin = smalloc(ct->nbins * sizeof(int));
+    for(i=0;i<ct->nbins;i++)
+        ct->ibin[i] = -1;
 
     return;
 }
@@ -166,7 +176,7 @@ static void initialiseCalTable(CalTable *ct, int tile, int read, int cycle)
 static void freeCalTable(CalTable *ct)
 {
     if(ct->nbins) {
-        free(ct->purity);
+        free(ct->predictor);
         free(ct->num_bases);
         free(ct->num_errors);
         free(ct->frac_bases);
@@ -183,7 +193,10 @@ static int restoreCalTable(Settings *s, const char* calibrationFile, HashTable *
     static const int line_size = 1028;
     char line[line_size];
     FILE *fp;
+    int mode = (NULL == s->intensity_dir ? CT_MODE_QUALITY : CT_MODE_PURITY);
     CalTable *current_ct = NULL;
+    float pmin = 1.0, pmax = 0.0;
+    int nbins = -1;
 
     fp = fopen(calibrationFile, "r");
     if( NULL == fp ){
@@ -197,13 +210,13 @@ static int restoreCalTable(Settings *s, const char* calibrationFile, HashTable *
 
     while( fgets(line, line_size, fp) ){
         int tile, read, cycle, num_bases, num_errors;
-        float purity, frac_bases, error_rate, quality;
+        float predictor, frac_bases, error_rate, quality;
         char key[100];
         HashItem *hi;
         HashData hd;
         int ibin;
         
-        if( 9 != sscanf(line, "%f %d %d %d %d %d %f %f %f", &purity, &read, &cycle, &tile,
+        if( 9 != sscanf(line, "%f %d %d %d %d %d %f %f %f", &predictor, &read, &cycle, &tile,
                         &num_bases, &num_errors, &frac_bases, &error_rate, &quality) ){
             perror("restoreCalTable");
             exit(EXIT_FAILURE);
@@ -246,22 +259,33 @@ static int restoreCalTable(Settings *s, const char* calibrationFile, HashTable *
             /* current ct is the new ct */
             current_ct = (CalTable *)hd.p;
 
-            initialiseCalTable(current_ct, tile, read, cycle);
+            initialiseCalTable(current_ct, mode, tile, read, cycle);
+            pmin = current_ct->offset;
+            pmax = pmin + (current_ct->nbins - 1 ) * current_ct->delta;
+
+            nbins = current_ct->nbins;
+            current_ct->nbins = 0;
 
             nct++;
         }else{
             current_ct = (CalTable *)hi->data.p;
         }
 
-        if( current_ct->nbins == 76 ){
-            fprintf(stderr, "ERROR: number of lines in CT file (%s) for tile/state=%d read=%d cycle=%d exceed maximum %d > %d\n",
-                    calibrationFile, current_ct->tile, current_ct->read, current_ct->cycle, current_ct->nbins, 76);
+        if( current_ct->nbins == nbins ){
+            fprintf(stderr, "ERROR: number of lines in CT file (%s) for tile/state=%d read=%d cycle=%d exceeds maximum %d\n",
+                    calibrationFile, current_ct->tile, current_ct->read, current_ct->cycle, nbins);
+            exit(EXIT_FAILURE);
+        }
+
+        if( predictor < pmin || predictor > pmax ) {
+            fprintf(stderr, "ERROR: predictor %f outside expected range for %s [%f,%f] in CT file (%s)\n",
+                    predictor, (current_ct->mode == CT_MODE_PURITY ? "purity" : "quality"), pmin, pmax, calibrationFile);
             exit(EXIT_FAILURE);
         }
 
         ibin = current_ct->nbins;
 
-        current_ct->purity[ibin] = purity;
+        current_ct->predictor[ibin] = predictor;
 
         current_ct->num_bases[ibin] = num_bases;
         current_ct->num_errors[ibin] = num_errors;
@@ -311,17 +335,17 @@ float GetPu (int n, int data[])
     return (float)Imax/(float)Isum;
 }
 
-int Get_bin_purity(CalTable *ct, int value)
+int Get_bin_predictor(CalTable *ct, int value)
 {
     int ibin = 0;
 
     if (ct->ibin[value] < 0) {
-        float purity = ct->offset + ct->delta * value;
+        float predictor = ct->offset + ct->delta * value;
         for(ibin=0;ibin<ct->nbins;ibin++)
-            if (purity<=ct->purity[ibin])
+            if (predictor<=ct->predictor[ibin])
                 break;
-        if (ibin == ct->nbins)
-            ibin--;
+        if (ibin >= ct->nbins)
+            ibin = (ct->nbins-1);
         ct->ibin[value] = ibin;
     }
 
@@ -332,14 +356,14 @@ int Get_bin_purity(CalTable *ct, int value)
 
 
 /*
-  Calculate purity, update quality value and write bam file
+  Calculate predictor, update quality value and write bam file
 
   Returns 0 on success
           1 on EOF
   Quits the program if the data in the files is inconsistent.
 */
 
-static int update_bam_qualities(Settings *s, HashTable *ct_hash, CifData *cif_data,
+static int update_bam_qualities(Settings *s, CalTable **cycle_cts, CifData *cif_data,
                                 size_t spot_num, int tile, int x, int y, int read,
                                 samfile_t *fp_bam, bam1_t *bam) {
     int cstart = s->cstart[read];
@@ -352,7 +376,7 @@ static int update_bam_qualities(Settings *s, HashTable *ct_hash, CifData *cif_da
     int read_qual[read_buff_size];
 
     assert(read_buff_size >= read_length);
-    assert((cstart + read_length) <= cif_data->ncycles);
+    if (NULL != cif_data) assert((cstart + read_length) <= cif_data->ncycles);
 
     if (s->spatial_filter) iregion = xy2region(x, y, s->region_size, s->nregions_x, s->nregions_y);
 
@@ -363,68 +387,61 @@ static int update_bam_qualities(Settings *s, HashTable *ct_hash, CifData *cif_da
     oq[b] = 0;
     bam_aux_append(bam, "OQ", 'Z', read_length+1, oq);
 
-    /* calculate purity and update qualities */
+    for (b = 0; b < read_length; b++)
+        read_qual[b] = qual[b];
+    if (BAM_FREVERSE & bam->core.flag)
+        reverse_int(read_qual, read_length);
+
+    /* calculate predictor and update qualities */
     for (c = cstart, b = 0; b < read_length; c++, b++) {
-        CifCycleData *cycle = cif_data->cycles + c;
-        char key[100];
-        HashItem *hi;
         CalTable *ct;
-        int channel;
-        int bin[cycle->num_channels];
-        float purity = -1;
+        float predictor = -1;
         int value, ibin, quality;
 
         /* set cycle ct */
         if (s->spatial_filter) {
-            /* state/read/cycle ct */
             int state = (getFilterData(tile, read, b, iregion) & REGION_STATE_MISMATCH) ? 1 : 0;
-            snprintf(key, sizeof(key), "%d:%d:%d", state, read, b);
-            if (NULL == (hi = HashTableSearch(ct_hash, key, strlen(key)))) {
-                fprintf(stderr,"ERROR: no calibration table for state=%d read=%d cycle=%d.\n", state, read, b);
-                exit(EXIT_FAILURE);
-            }
+            ct = cycle_cts[state * cif_data->ncycles] + b;
         }else{
-            /* tile/read/cycle ct */
-            snprintf(key, sizeof(key), "%d:%d:%d", tile, read, b);
-            if (NULL == (hi = HashTableSearch(ct_hash, key, strlen(key)))) {
-                /* read/cycle ct */
-                snprintf(key, sizeof(key), "%d:%d:%d", -1, read, b);
-                if (NULL == (hi = HashTableSearch(ct_hash, key, strlen(key)))) {
-                    fprintf(stderr,"ERROR: no calibration table for tile=%d read=%d cycle=%d.\n", tile, read, b);
-                    exit(EXIT_FAILURE);
-                }
-            }
-        }
-        ct = (CalTable *)hi->data.p;
-
-        read_cif_chunk(cycle, spot_num);
-        for (channel = 0; channel < cycle->num_channels; channel++) {
-            size_t base_pos = spot_num - cycle->chunk_start;
-            switch (cycle->data_type) {
-            case 1:
-                bin[channel] = cycle->chan_data[channel].i8[base_pos];
-                break;
-            case 2:
-                bin[channel] = cycle->chan_data[channel].i16[base_pos];
-                break;
-            case 4:
-                bin[channel] = cycle->chan_data[channel].i32[base_pos];
-                if (bin[channel] > 65535) {
-                    bin[channel] = 65535;
-                } else if (bin[channel] < -65535) {
-                    bin[channel] = -65535;
-                }
-                break;
-            default:
-                abort();
-            }
+            ct = cycle_cts[b];
         }
 
-        purity = GetPu(cycle->num_channels, bin);
+        if (ct->mode == CT_MODE_PURITY) {
+            CifCycleData *cycle = cif_data->cycles + c;
+            int channel;
+            int bin[cycle->num_channels];
 
-        value = ct->scale * (purity - ct->offset) + 0.5;
+            read_cif_chunk(cycle, spot_num);
+            for (channel = 0; channel < cycle->num_channels; channel++) {
+                size_t base_pos = spot_num - cycle->chunk_start;
+                switch (cycle->data_type) {
+                case 1:
+                    bin[channel] = cycle->chan_data[channel].i8[base_pos];
+                    break;
+                case 2:
+                    bin[channel] = cycle->chan_data[channel].i16[base_pos];
+                    break;
+                case 4:
+                    bin[channel] = cycle->chan_data[channel].i32[base_pos];
+                    if (bin[channel] > 65535) {
+                        bin[channel] = 65535;
+                    } else if (bin[channel] < -65535) {
+                        bin[channel] = -65535;
+                    }
+                    break;
+                default:
+                    abort();
+                }
+            }
 
-        ibin = Get_bin_purity(ct, value);
+            predictor = GetPu(cycle->num_channels, bin);
+        } else {
+            predictor = read_qual[b];
+        }
+
+        value = ct->scale * (predictor - ct->offset) + 0.5;
+
+        ibin = Get_bin_predictor(ct, value);
         quality = (int)(ct->quality[ibin] + 0.5);
         read_qual[b] = quality;
     }
@@ -467,9 +484,12 @@ static int update_bam_qualities(Settings *s, HashTable *ct_hash, CifData *cif_da
  *	   -1 for failure
  */
 int recalibrate_bam(Settings *s, HashTable *ct_hash, samfile_t *fp_in_bam, samfile_t *fp_out_bam, size_t *nreads) {
-    CifData *cif_data = NULL;
 
     HashTable *tile_hash;
+
+    CifData *cif_data = NULL;
+
+    CalTable ***cycle_cts = NULL;
 
     int ncycles_firecrest = -1;
 
@@ -479,19 +499,21 @@ int recalibrate_bam(Settings *s, HashTable *ct_hash, samfile_t *fp_in_bam, samfi
     int ntiles_bam = 0;
     size_t nreads_bam = 0;
 
-    tile_hash = HashTableCreate(0, HASH_DYNAMIC_SIZE | HASH_FUNC_JENKINS3);
-    if (!tile_hash) die("Failed to create tile_hash\n");
+    int read;
 
     bam1_t *bam = bam_init1();
 
-    checked_chdir(s->intensity_dir);
+    if (NULL != s->intensity_dir) checked_chdir(s->intensity_dir);
+
+    tile_hash = HashTableCreate(N_TILES, HASH_DYNAMIC_SIZE | HASH_FUNC_JENKINS3);
+    if (!tile_hash) die("Failed to create tile_hash\n");
 
     /* loop over reads in the input bam file */
     while (1){
         int bam_lane = -1, bam_tile = -1, bam_x = -1, bam_y = -1, bam_read = -1, read_length;
         size_t bam_offset = 0;
 
-        if (parse_bam_readinfo(fp_in_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, &bam_offset)) {
+        if (parse_bam_readinfo(fp_in_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, (NULL == s->intensity_dir ? NULL : &bam_offset))) {
             break;	/* break on end of BAM file */
         }
 
@@ -521,42 +543,83 @@ int recalibrate_bam(Settings *s, HashTable *ct_hash, samfile_t *fp_in_bam, samfi
         if (bam_tile != tile) {
             tile = bam_tile;
             
-            if (!s->quiet) fprintf(stderr, "Processing tile %i (%lu)\n", tile, nreads_bam);
-
-            /* Look for processed trace data */
-            if (NULL != cif_data) free_cif_data(cif_data);
-            cif_data = load_cif_data(lane, tile, "dif");
-
-            /* Check that we actually got some trace data */
-            if (NULL == cif_data) {
-                fprintf(stderr, "Error: no intensity files found for lane %i tile %i.\n", lane, tile);
-                exit(EXIT_FAILURE);
-            }
-
-            if(ncycles_firecrest == -1) {
-                ncycles_firecrest = cif_data->ncycles;
-            } else if(cif_data->ncycles != ncycles_firecrest){
-                fprintf(stderr,
-                        "ERROR: %lu intensity cycles for tile %i"
-                        "with %i cycles expected.\n",
-                        cif_data->ncycles, tile, ncycles_firecrest);
-                exit(EXIT_FAILURE);
-            }
-
             // lookup itile from tile in tile hash
             HashItem *tileItem = HashTableSearch(tile_hash, (char *)&tile, sizeof(tile));
-            if (tileItem) {
-                fprintf(stderr,"ERROR: alignments are not sorted by tile.\n");
-                exit(EXIT_FAILURE);
+            if (NULL == tileItem) {
+  	        HashData hd;
+                hd.p = smalloc(N_READS * sizeof(CalTable **));
+                if( NULL == HashTableAdd(tile_hash, (char *)&tile, sizeof(tile), hd, NULL) ){
+                    fprintf(stderr, "ERROR: building tile hash table\n");
+                    exit(EXIT_FAILURE);
+                }
+                ntiles_bam++;
+                cycle_cts = (CalTable ***)hd.p;
+                for(read=0;read<N_READS;read++)
+                    cycle_cts[read] = NULL;
+                if (!s->quiet) fprintf(stderr, "Processing tile %i (%lu)\n", tile, nreads_bam);
             } else {
-  	         HashData hd;
-                 hd.i = ntiles_bam++;
-                 if (HashTableAdd(tile_hash, (char *)&tile, sizeof(tile), hd, NULL) == NULL)
-                     die("Failed to add tile %d to tile_hash\n", bam_tile);
+                if( NULL != s->intensity_dir ) {
+                    fprintf(stderr,"ERROR: alignments are not sorted by tile.\n");
+                    exit(EXIT_FAILURE);
+                }
+                cycle_cts = (CalTable ***)tileItem->data.p;
+            }
+
+            if ( NULL != s->intensity_dir) {
+                /* Look for processed trace data */
+                if (NULL != cif_data) free_cif_data(cif_data);
+                cif_data = load_cif_data(lane, tile, "dif");
+            
+                /* Check that we actually got some trace data */
+                if (NULL == cif_data) {
+                    fprintf(stderr, "Error: no intensity files found for lane %i tile %i.\n", lane, tile);
+                    exit(EXIT_FAILURE);
+                }
+
+                if(ncycles_firecrest == -1) {
+                    ncycles_firecrest = cif_data->ncycles;
+                } else if(cif_data->ncycles != ncycles_firecrest){
+                    fprintf(stderr,
+                            "ERROR: %lu intensity cycles for tile %i"
+                            "with %i cycles expected.\n",
+                            cif_data->ncycles, tile, ncycles_firecrest);
+                    exit(EXIT_FAILURE);
+                }
             }
         }
 
-        if (0 != update_bam_qualities(s, ct_hash, cif_data,
+        /* reset cycle ct */
+        if (NULL == cycle_cts[bam_read]) {
+            int nct = (s->spatial_filter ? N_STATES : 1) * read_length, cycle;
+            cycle_cts[bam_read] = smalloc(nct * sizeof(CalTable *));
+            for(cycle=0;cycle<read_length;cycle++) {
+                char key[100];
+                HashItem *hi;
+                if (s->spatial_filter) {
+                    int state;
+                    for(state=0;state<N_STATES;state++) {
+                        snprintf(key, sizeof(key), "%d:%d:%d", state, bam_read, cycle);
+                        if (NULL == (hi = HashTableSearch(ct_hash, key, strlen(key)))) {
+                            fprintf(stderr,"ERROR: no calibration table for state=%d read=%d cycle=%d.\n", state, bam_read, cycle);
+                            exit(EXIT_FAILURE);
+                        }
+                        cycle_cts[bam_read][state * read_length + cycle] = (CalTable *)hi->data.p;
+                    }
+                } else {
+                    snprintf(key, sizeof(key), "%d:%d:%d", bam_tile, bam_read, cycle);
+                    if (NULL == (hi = HashTableSearch(ct_hash, key, strlen(key)))) {
+                        snprintf(key, sizeof(key), "%d:%d:%d", -1, bam_read, cycle);
+                        if (NULL == (hi = HashTableSearch(ct_hash, key, strlen(key)))) {
+                            fprintf(stderr,"ERROR: no calibration table for tile=%d read=%d cycle=%d.\n", bam_tile, bam_read, cycle);
+                            exit(EXIT_FAILURE);
+                        }
+                    }
+                    cycle_cts[bam_read][cycle] = (CalTable *)hi->data.p;
+                }
+            }
+        }
+
+        if (0 != update_bam_qualities(s, cycle_cts[bam_read], cif_data,
                                       bam_offset, bam_tile, bam_x, bam_y, bam_read,
                                       fp_out_bam, bam)) {
             fprintf(stderr,"ERROR: updating quality values.\n");
@@ -754,16 +817,16 @@ int main(int argc, char **argv) {
     }
 
     /* get absolute intensity dir*/
-    if(override_intensity_dir){
+    if (override_intensity_dir) {
         settings.intensity_dir = get_real_path_name(override_intensity_dir);
         if (NULL == settings.intensity_dir) {
             fprintf(stderr, "ERROR: can't process intensity dir: %s\n",
                     override_intensity_dir);
             exit(EXIT_FAILURE);
         }
+        fprintf(stderr,"Building purity cycle calibration table\n");
     } else {
-        fprintf(stderr,"ERROR: you must specify an intensity dir\n");
-        exit(EXIT_FAILURE);
+        fprintf(stderr,"Building quality cycle calibration table\n");
     }
 
     /* read filter file */
@@ -788,7 +851,9 @@ int main(int argc, char **argv) {
     nct = restoreCalTable(&settings, ct_filename, ct_hash);
 
     /* Look for CIF directories */
-    get_cif_dirs(settings.intensity_dir);
+    if (NULL != settings.intensity_dir) {
+        get_cif_dirs(settings.intensity_dir);
+    }
 
     /* open the input bam file */
     fp_input_bam = samopen(in_bam_file, "rb", 0);

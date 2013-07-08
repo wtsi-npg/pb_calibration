@@ -89,11 +89,6 @@ initialise ()
         exit 1
     fi
 
-    if [ -z $intensity_dir ] ; then
-        echo "You must supply an intensity_dir" >&2
-        exit 1
-    fi
-
     if [ -z $cstart ] && ( [ -z $cstart1 ] || [ -z $cstart2 ] ) ; then
         echo "You must supply cstart OR cstart1 and cstart2" >&2
         exit 1
@@ -128,11 +123,15 @@ if [ ! -s $bam ] ; then
     exit 1
 fi
 
-if [ ! -d $intensity_dir ] ; then
-    echo "Intensity directory $intensity_dir does not exist" >&2
-    exit 1
-fi
-echo "intensity directory $intensity_dir" >&2
+if [ $intensity_dir ] ; then
+    if [ ! -d $intensity_dir ] ; then
+        echo "Intensity directory $intensity_dir does not exist" >&2
+        exit 1
+    fi
+    echo "intensity directory $intensity_dir" >&2
+else
+    echo "No intensity directory" >&2
+fi    
 
 echo "Output file prefix ${prefix}" >&2
 
@@ -165,7 +164,11 @@ fi
 
 echo "Making calibration table..." >&2
 
-parms="-intensity-dir $intensity_dir -nL $nL -nR $nR -p $prefix"
+parms="-nL $nL -nR $nR -p $prefix"
+
+if [ $intensity_dir ] ; then
+  parms="$parms -intensity-dir $intensity_dir"
+fi
 
 if [ $snp ] ; then
     parms="$parms -snp_file $snp"
@@ -187,7 +190,11 @@ fi
 
 $tools/calibration_pu $parms $bam
 
-ct=${prefix}_purity_cycle_caltable.txt
+if [ $intensity_dir ] ; then
+  ct=${prefix}_purity_cycle_caltable.txt
+else
+  ct=${prefix}_quality_cycle_caltable.txt
+fi  
 
 echo "Checking calibration table $ct" >&2
 
