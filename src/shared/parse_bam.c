@@ -371,5 +371,6 @@ void bam_header_add_pg(char *id, char *pn, char *ds, char *cl, bam_header_t *bam
 	append_header_text(bam_header, pg, pglen);
 
 	free(pg);
+        free(id2);
         free(text);
 }
