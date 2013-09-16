@@ -3,7 +3,6 @@
 
 #include <stdio.h>
 
-#define N_TILES 120
 #define N_READS 3
 #define N_COMMENTS 100
 
@@ -45,6 +44,8 @@ typedef struct {
         int deletion;
         int soft_clip;
         int known_snp;
+        float quality1;
+        float quality2;
 	char state;
 } RegionTable;
 
