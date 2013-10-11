@@ -65,6 +65,7 @@ AC_DEFUN([AX_LIB_SAMTOOLS],
       then
           SAMTOOLS_LDFLAGS="-L${SAMTOOLS_ROOT}/lib -lbam $ZLIB_LDFLAGS $extra_lib"
   	  SAMTOOLS_CFLAGS="-I${SAMTOOLS_ROOT}/include"
+          break
       else
   	  # Maybe DIR is a source/build directory instead of an install dir.
   	  # So try again
@@ -82,6 +83,7 @@ AC_DEFUN([AX_LIB_SAMTOOLS],
           then
               SAMTOOLS_LDFLAGS="-L${SAMTOOLS_ROOT} -lbam $ZLIB_LDFLAGS $extra_lib"
   	      SAMTOOLS_CFLAGS="-I${SAMTOOLS_ROOT}"
+              break
           else
               # Backout and whinge
               CPPFLAGS=$_cppflags
@@ -102,6 +104,7 @@ AC_DEFUN([AX_LIB_SAMTOOLS],
       then
           SAMTOOLS_LDFLAGS="-lbam $ZLIB_LDFLAGS $extra_lib"
           SAMTOOLS_CFLAGS=
+          break
       fi
   fi
   done
