@@ -10,13 +10,14 @@
 #define COORD_FACTOR  10
 
 #define REGION_MAGIC                "RGFL"
-#define REGION_SIZE                 700
+#define REGION_SIZE                 200
 
 #define REGION_STATE_COVERAGE   (1<<1)
 #define REGION_STATE_MISMATCH   (1<<2)
 #define REGION_STATE_INSERTION  (1<<3)
 #define REGION_STATE_DELETION   (1<<4)
 #define REGION_STATE_SOFT_CLIP  (1<<5)
+#define REGION_STATE_BAD        (1<<6)
 
 // The header of the filter file
 typedef struct {
@@ -44,8 +45,7 @@ typedef struct {
         int deletion;
         int soft_clip;
         int known_snp;
-        float quality1;
-        float quality2;
+        float quality;
 	char state;
 } RegionTable;
 
