@@ -24,10 +24,8 @@ int parse_bam_readinfo( samfile_t *fp,
                     size_t *bam_offset) 
 {
 
-    char *name;
-    const char *sep = ":#/";
-    const char *cp;
-	uint8_t *ci_ptr;
+    const char* const sep = ":#/";
+    uint8_t *ci_ptr;
     int lane, tile, x, y, read;
 	int offset;
 
@@ -38,32 +36,39 @@ int parse_bam_readinfo( samfile_t *fp,
     x = -1;
     y = -1;
 
-    name = bam1_qname(bam);
-    cp = strchr(name,':');
-    if (NULL == cp) die("ERROR: Invalid run in name: \"%s\"\n",name);
-    cp++;
+    const char* const name = bam1_qname(bam);
+    const char *cp = name;
+    /* let's find the beginning of the last 4 subfields of name separated by ':' */
+    const char *c_subfield_p[4] = {name, name, name, name};
+    int c_subfield_i = 0;
+    while (NULL != (cp = strchr(cp,':'))) {
+      c_subfield_p[c_subfield_i] = ++cp;
+      c_subfield_i++;
+      c_subfield_i %= 4;
+    }
+    cp = c_subfield_p[c_subfield_i];
     cp = parse_next_int(cp,&lane,sep);
     cp = parse_next_int(cp,&tile,sep);
     cp = parse_next_int(cp,&x,sep);
     cp = parse_next_int(cp,&y,sep);
 
-	if (bam_offset) {	/* look for offset, if we want it */
-		/* look for ci tag */
-		ci_ptr = bam_aux_get(bam, "ci");
-		if (NULL == ci_ptr) {
-			/* no ci tag get offset from name */
-			cp = parse_next_int(cp,&offset,sep);
-			if (NULL == cp) die("ERROR: No ci tag and no offset in name: \"%s\"\n",name);
-		} else {
-			offset = bam_aux2i(ci_ptr);
-			/* name offset is 0 based but ci is 1 based */
-			offset--;
-		}
-	}
+    if (bam_offset) {	/* look for offset, if we want it */
+      /* look for ci tag */
+      ci_ptr = bam_aux_get(bam, "ci");
+      if (NULL == ci_ptr) {
+        /* no ci tag get offset from name (cannot be spearated with a ':')*/
+        cp = parse_next_int(cp,&offset,sep);
+        if (NULL == cp) die("ERROR: No ci tag and no offset in name: \"%s\"\n",name);
+      } else {
+        offset = bam_aux2i(ci_ptr);
+        /* name offset is 0 based but ci is 1 based */
+        offset--;
+      }
+    }
 
-	if (lane < 1) die("ERROR: Invalid lane value in name: \"%s\"\n",name);
+    if (lane < 1) die("ERROR: Invalid lane value in name: \"%s\"\n",name);
 
-	if (tile <= 0) die("ERROR: Invalid tile value in name: \"%s\"\n",name);
+    if (tile <= 0) die("ERROR: Invalid tile value in name: \"%s\"\n",name);
 
     read = 0;
     if(BAM_FPAIRED & bam->core.flag){
@@ -121,6 +126,7 @@ parse_bam_alignments(
     seq = bam1_seq(bam);
     qual = bam1_qual(bam);
     m_ptr = bam_aux_get(bam, "MD");
+    assert(read_buff_size > bam->core.l_qseq);
 
     if (NULL == m_ptr) {
         die("ERROR: No mismatch for read: \"%s\"\n", name);
@@ -143,7 +149,7 @@ parse_bam_alignments(
 
     j = 0;
     for (i = 0; i < bam->core.n_cigar; i++) {
-        int l = cigar[i] >> 4, op = cigar[i] & 0xf, k;
+        int l = cigar[i] >> 4, op = cigar[i] & 0xf, jdel, k;
         switch (op) {
         case BAM_CMATCH:
             // CIGAR: alignment match;
@@ -154,11 +160,13 @@ parse_bam_alignments(
             break;
         case BAM_CDEL:
             // CIGAR: deletion from the reference
-            if (j == bam->core.l_qseq) {
-                die("ERROR: Trailing deletion for read: %s\n",
-                    name);
+            // deleted bases are missing so tag the cycle immediately before the deletion, since the cigar is in the
+            // forward direction the cycle before the deletion is j-1 for forward reads and j for reverse reads
+            jdel = j - (BAM_FREVERSE & bam->core.flag ? 0 : 1);
+            if (jdel < 0 || jdel >= bam->core.l_qseq) {
+                die("ERROR: Deletion at start/end of read: %s\n", name);
             }
-            read_mismatch[j] |= BASE_DELETION;
+            read_mismatch[jdel] |= BASE_DELETION;
             break;
         case BAM_CINS:
             // CIGAR: insertion to the reference 
@@ -371,5 +379,6 @@ void bam_header_add_pg(char *id, char *pn, char *ds, char *cl, bam_header_t *bam
 	append_header_text(bam_header, pg, pglen);
 
 	free(pg);
+        free(id2);
         free(text);
 }
