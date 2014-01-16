@@ -398,11 +398,11 @@ char *get_command_line(int argc, char **argv) {
     return cmdline;
 }
 
-int tile_cmp(const void *t1, const void *t2) {
-    return *(int *)t1 != *(int *)t2;
+int int_cmp(const void *i1, const void *i2) {
+    return *(int *)i1 != *(int *)i2;
 }
 
-int tile_sort(const void *t1, const void *t2) {
-    return *(int *)t1 > *(int *)t2;
+int int_sort(const void *i1, const void *i2) {
+    return *(int *)i1 > *(int *)i2;
 }
 

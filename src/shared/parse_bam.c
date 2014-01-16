@@ -149,7 +149,7 @@ parse_bam_alignments(
 
     j = 0;
     for (i = 0; i < bam->core.n_cigar; i++) {
-        int l = cigar[i] >> 4, op = cigar[i] & 0xf, k;
+        int l = cigar[i] >> 4, op = cigar[i] & 0xf, jdel, k;
         switch (op) {
         case BAM_CMATCH:
             // CIGAR: alignment match;
@@ -160,11 +160,13 @@ parse_bam_alignments(
             break;
         case BAM_CDEL:
             // CIGAR: deletion from the reference
-            if (j == bam->core.l_qseq) {
-                die("ERROR: Trailing deletion for read: %s\n",
-                    name);
+            // deleted bases are missing so tag the cycle immediately before the deletion, since the cigar is in the
+            // forward direction the cycle before the deletion is j-1 for forward reads and j for reverse reads
+            jdel = j - (BAM_FREVERSE & bam->core.flag ? 0 : 1);
+            if (jdel < 0 || jdel >= bam->core.l_qseq) {
+                die("ERROR: Deletion at start/end of read: %s\n", name);
             }
-            read_mismatch[j] |= BASE_DELETION;
+            read_mismatch[jdel] |= BASE_DELETION;
             break;
         case BAM_CINS:
             // CIGAR: insertion to the reference 
@@ -377,5 +379,6 @@ void bam_header_add_pg(char *id, char *pn, char *ds, char *cl, bam_header_t *bam
 	append_header_text(bam_header, pg, pglen);
 
 	free(pg);
+        free(id2);
         free(text);
 }

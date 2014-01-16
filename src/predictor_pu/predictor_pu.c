@@ -97,9 +97,6 @@
 
 #include <version.h>
 
-/* if we split data by state, using a filter file rather than tile, use tile as a place holder for state */
-#define N_STATES 2
-
 #define CT_MODE_PURITY  (1<<0)
 #define CT_MODE_QUALITY (1<<1)
 
@@ -130,10 +127,6 @@ typedef struct {
     int read_length[3];
     int cstart[3];
     int quiet;
-    int spatial_filter;
-    int region_size;
-    int nregions_x;
-    int nregions_y;
     char *working_dir;
 } Settings;
 
@@ -234,14 +227,6 @@ static int restoreCalTable(Settings *s, const char* calibrationFile, HashTable *
             exit(EXIT_FAILURE);
         }
 
-        if( s->spatial_filter ){
-            if( tile < 0 || tile >= N_STATES ){
-                fprintf(stderr,"ERROR: Invalid state in CT file (%s) %d < 0 or > %d.\n",
-                        calibrationFile, tile, N_STATES);
-                exit(EXIT_FAILURE);
-            }
-        }
-    
         snprintf(key, sizeof(key), "%d:%d:%d", tile, read, cycle);
         if( NULL == (hi = HashTableSearch(ct_hash, key, strlen(key))) ){
             hd.p = smalloc(sizeof(CalTable));
@@ -250,11 +235,7 @@ static int restoreCalTable(Settings *s, const char* calibrationFile, HashTable *
                 exit(EXIT_FAILURE);
             }
 
-            if( s->spatial_filter ){
-                if( tile == 1 ) fprintf(stderr, "bad region read=%d cycle=%3d\n", read, cycle);
-            }else{
-                if( tile > 0 ) fprintf(stderr, "bad tile=%4d read=%d cycle=%3d\n", tile, read, cycle);
-            }
+            if( tile > 0 ) fprintf(stderr, "bad tile=%4d read=%d cycle=%3d\n", tile, read, cycle);
             
             /* current ct is the new ct */
             current_ct = (CalTable *)hd.p;
@@ -272,7 +253,7 @@ static int restoreCalTable(Settings *s, const char* calibrationFile, HashTable *
         }
 
         if( current_ct->nbins == nbins ){
-            fprintf(stderr, "ERROR: number of lines in CT file (%s) for tile/state=%d read=%d cycle=%d exceeds maximum %d\n",
+            fprintf(stderr, "ERROR: number of lines in CT file (%s) for tile=%d read=%d cycle=%d exceeds maximum %d\n",
                     calibrationFile, current_ct->tile, current_ct->read, current_ct->cycle, nbins);
             exit(EXIT_FAILURE);
         }
@@ -368,7 +349,6 @@ static int update_bam_qualities(Settings *s, CalTable **cycle_cts, CifData *cif_
                                 samfile_t *fp_bam, bam1_t *bam) {
     int cstart = s->cstart[read];
     int read_length = s->read_length[read];
-    int iregion = -1;
     int c, b;
     uint8_t *seq, *qual;
     static const int read_buff_size = 1024;
@@ -377,8 +357,6 @@ static int update_bam_qualities(Settings *s, CalTable **cycle_cts, CifData *cif_
 
     assert(read_buff_size >= read_length);
     if (NULL != cif_data) assert((cstart + read_length) <= cif_data->ncycles);
-
-    if (s->spatial_filter) iregion = xy2region(x, y, s->region_size, s->nregions_x, s->nregions_y);
 
     /* copy original qualities to OQ:Z tag, N.B. have to null terminate aux strings */
     qual = bam1_qual(bam);
@@ -394,17 +372,9 @@ static int update_bam_qualities(Settings *s, CalTable **cycle_cts, CifData *cif_
 
     /* calculate predictor and update qualities */
     for (c = cstart, b = 0; b < read_length; c++, b++) {
-        CalTable *ct;
+        CalTable *ct = cycle_cts[b];
         float predictor = -1;
         int value, ibin, quality;
-
-        /* set cycle ct */
-        if (s->spatial_filter) {
-            int state = (getFilterData(tile, read, b, iregion) & REGION_STATE_MISMATCH) ? 1 : 0;
-            ct = cycle_cts[state * cif_data->ncycles] + b;
-        }else{
-            ct = cycle_cts[b];
-        }
 
         if (ct->mode == CT_MODE_PURITY) {
             CifCycleData *cycle = cif_data->cycles + c;
@@ -483,7 +453,7 @@ static int update_bam_qualities(Settings *s, CalTable **cycle_cts, CifData *cif_
  * Returns: 0 written for success
  *	   -1 for failure
  */
-int recalibrate_bam(Settings *s, HashTable *ct_hash, samfile_t *fp_in_bam, samfile_t *fp_out_bam, size_t *nreads) {
+int recalibrate_bam(Settings *s, HashTable *ct_hash, samfile_t *fp_in_bam, samfile_t *fp_out_bam, size_t *bam_nreads) {
 
     HashTable *tile_hash;
 
@@ -496,16 +466,13 @@ int recalibrate_bam(Settings *s, HashTable *ct_hash, samfile_t *fp_in_bam, samfi
     int lane = -1;
     int tile = -1;
 
-    int ntiles_bam = 0;
-    size_t nreads_bam = 0;
-
-    int read;
+    size_t nreads = 0;
 
     bam1_t *bam = bam_init1();
 
     if (NULL != s->intensity_dir) checked_chdir(s->intensity_dir);
 
-    tile_hash = HashTableCreate(N_TILES, HASH_DYNAMIC_SIZE | HASH_FUNC_JENKINS3);
+    tile_hash = HashTableCreate(0, HASH_DYNAMIC_SIZE | HASH_FUNC_JENKINS3);
     if (!tile_hash) die("Failed to create tile_hash\n");
 
     /* loop over reads in the input bam file */
@@ -547,16 +514,16 @@ int recalibrate_bam(Settings *s, HashTable *ct_hash, samfile_t *fp_in_bam, samfi
             HashItem *tileItem = HashTableSearch(tile_hash, (char *)&tile, sizeof(tile));
             if (NULL == tileItem) {
   	        HashData hd;
+                int read;
                 hd.p = smalloc(N_READS * sizeof(CalTable **));
                 if( NULL == HashTableAdd(tile_hash, (char *)&tile, sizeof(tile), hd, NULL) ){
                     fprintf(stderr, "ERROR: building tile hash table\n");
                     exit(EXIT_FAILURE);
                 }
-                ntiles_bam++;
                 cycle_cts = (CalTable ***)hd.p;
                 for(read=0;read<N_READS;read++)
                     cycle_cts[read] = NULL;
-                if (!s->quiet) fprintf(stderr, "Processing tile %i (%lu)\n", tile, nreads_bam);
+                if (!s->quiet) fprintf(stderr, "Processing tile %i (%lu)\n", tile, nreads);
             } else {
                 if( NULL != s->intensity_dir ) {
                     fprintf(stderr,"ERROR: alignments are not sorted by tile.\n");
@@ -590,32 +557,20 @@ int recalibrate_bam(Settings *s, HashTable *ct_hash, samfile_t *fp_in_bam, samfi
 
         /* reset cycle ct */
         if (NULL == cycle_cts[bam_read]) {
-            int nct = (s->spatial_filter ? N_STATES : 1) * read_length, cycle;
-            cycle_cts[bam_read] = smalloc(nct * sizeof(CalTable *));
+            int cycle;
+            cycle_cts[bam_read] = smalloc(read_length * sizeof(CalTable *));
             for(cycle=0;cycle<read_length;cycle++) {
                 char key[100];
                 HashItem *hi;
-                if (s->spatial_filter) {
-                    int state;
-                    for(state=0;state<N_STATES;state++) {
-                        snprintf(key, sizeof(key), "%d:%d:%d", state, bam_read, cycle);
-                        if (NULL == (hi = HashTableSearch(ct_hash, key, strlen(key)))) {
-                            fprintf(stderr,"ERROR: no calibration table for state=%d read=%d cycle=%d.\n", state, bam_read, cycle);
-                            exit(EXIT_FAILURE);
-                        }
-                        cycle_cts[bam_read][state * read_length + cycle] = (CalTable *)hi->data.p;
-                    }
-                } else {
-                    snprintf(key, sizeof(key), "%d:%d:%d", bam_tile, bam_read, cycle);
+                snprintf(key, sizeof(key), "%d:%d:%d", bam_tile, bam_read, cycle);
+                if (NULL == (hi = HashTableSearch(ct_hash, key, strlen(key)))) {
+                    snprintf(key, sizeof(key), "%d:%d:%d", -1, bam_read, cycle);
                     if (NULL == (hi = HashTableSearch(ct_hash, key, strlen(key)))) {
-                        snprintf(key, sizeof(key), "%d:%d:%d", -1, bam_read, cycle);
-                        if (NULL == (hi = HashTableSearch(ct_hash, key, strlen(key)))) {
-                            fprintf(stderr,"ERROR: no calibration table for tile=%d read=%d cycle=%d.\n", bam_tile, bam_read, cycle);
-                            exit(EXIT_FAILURE);
-                        }
+                        fprintf(stderr,"ERROR: no calibration table for tile=%d read=%d cycle=%d.\n", bam_tile, bam_read, cycle);
+                        exit(EXIT_FAILURE);
                     }
-                    cycle_cts[bam_read][cycle] = (CalTable *)hi->data.p;
                 }
+                cycle_cts[bam_read][cycle] = (CalTable *)hi->data.p;
             }
         }
 
@@ -626,13 +581,26 @@ int recalibrate_bam(Settings *s, HashTable *ct_hash, samfile_t *fp_in_bam, samfi
             exit(EXIT_FAILURE);
         }
 
-        nreads_bam++;
+        nreads++;
     }
     
-    *nreads = nreads_bam;
+    *bam_nreads = nreads;
 
     bam_destroy1(bam);
     
+    if (NULL != tile_hash) {
+	HashIter *iter = HashTableIterCreate();
+	HashItem *tileItem;
+	while ((tileItem = HashTableIterNext(tile_hash, iter))) {
+            int read;
+            cycle_cts = (CalTable ***)tileItem->data.p;
+            for(read=0;read<N_READS;read++)
+                if (NULL != cycle_cts[read]) free(cycle_cts[read]);
+            free(cycle_cts);
+        }
+        HashTableIterDestroy(iter);
+        HashTableDestroy(tile_hash, 0);
+    }
     if (NULL != cif_data) free_cif_data(cif_data);
 
     return 0;
@@ -661,8 +629,6 @@ void usage(int code) {
     fprintf(usagefp, "    -intensity-dir dir\n");
     fprintf(usagefp, "             Intensity directory\n");
     fprintf(usagefp, "               no default\n");
-    fprintf(usagefp, "    -filter_file file\n");
-    fprintf(usagefp, "               spatial filter file\n");
     fprintf(usagefp, "    -cstart int\n");
     fprintf(usagefp, "             intensity cycle number of first base of read in single-end bam file\n");
     fprintf(usagefp, "               no default\n");
@@ -716,10 +682,6 @@ int main(int argc, char **argv) {
 
     settings.output = NULL;
     settings.quiet = 0;
-    settings.spatial_filter = 0;
-    settings.region_size = 0;
-    settings.nregions_x = 0;
-    settings.nregions_y = 0;
     settings.cstart[0] = 0;
     settings.cstart[1] = 0;
     settings.cstart[2] = 0;
@@ -824,26 +786,13 @@ int main(int argc, char **argv) {
                     override_intensity_dir);
             exit(EXIT_FAILURE);
         }
-        fprintf(stderr,"Building purity cycle calibration table\n");
+        fprintf(stderr,"Assuming purity cycle calibration table\n");
     } else {
-        fprintf(stderr,"Building quality cycle calibration table\n");
-    }
-
-    /* read filter file */
-    if (NULL != filter_file) {
-        FILE *fp = fopen(filter_file, "rb");
-        if (!fp) die("Can't open filter file %s\n", filter_file);
-        Header filter_header;
-        readHeader(fp, &filter_header);
-        readFilterData(fp, &filter_header);
-        settings.spatial_filter = 1;
-        settings.region_size = filter_header.region_size;
-        settings.nregions_x = filter_header.nregions_x;
-        settings.nregions_y = filter_header.nregions_y;
+        fprintf(stderr,"Assuming quality cycle calibration table\n");
     }
 
     if (NULL == (ct_hash = HashTableCreate(0, HASH_DYNAMIC_SIZE|HASH_FUNC_JENKINS3))) {
-        fprintf(stderr, "ERROR: creating tile caltable hash\n");
+        fprintf(stderr, "ERROR: creating caltable hash\n");
         exit(EXIT_FAILURE);
     }
 
@@ -894,13 +843,17 @@ int main(int argc, char **argv) {
     }
 
     if (NULL != ct_hash) {
-	HashIter *tileIter = HashTableIterCreate();
+	HashIter *iter = HashTableIterCreate();
 	HashItem *hashItem;
-	while ((hashItem = HashTableIterNext(ct_hash, tileIter)))
+	while ((hashItem = HashTableIterNext(ct_hash, iter)))
             freeCalTable((CalTable *)hashItem->data.p);
+        HashTableIterDestroy(iter);
+        HashTableDestroy(ct_hash, 0);
     }
 
     if (NULL != settings.working_dir) free(settings.working_dir);
+    if (NULL != settings.cmdline) free(settings.cmdline);
+    if (NULL != settings.intensity_dir) free(settings.intensity_dir);
 
     return EXIT_SUCCESS;
 
