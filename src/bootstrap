@@ -14,4 +14,4 @@ autoconf
 
 # usually build in bin directory at same level at current (src) directory
 #
-# ./configure --prefix=full_path_to_parent_dir --with-samtools=/software/solexa/bin/aligners/samtools/current
+# ./configure --prefix=full_path_to_parent_dir --with-samtools=/software/solexa/pkg/samtools/current
