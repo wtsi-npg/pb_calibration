@@ -279,12 +279,6 @@ static int restoreCalTable(Settings *s, const char* calibrationFile, HashTable *
 
     fclose(fp);
 
-    if( 0 == nct ){
-        fprintf(stderr, "ERROR: no rows in calibration table %s\n",
-                calibrationFile);
-        exit(EXIT_FAILURE);
-    }
-
     return nct;
 }
 
@@ -797,6 +791,10 @@ int main(int argc, char **argv) {
 
     // read the callibration table
     nct = restoreCalTable(&settings, ct_filename, ct_hash);
+    if( 0 == nct ){
+        fprintf(stderr, "ERROR: no rows in calibration table %s\n", ct_filename);
+        exit(EXIT_FAILURE);
+    }
 
     /* Look for CIF directories */
     if (NULL != settings.intensity_dir) {
