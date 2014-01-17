@@ -713,7 +713,7 @@ static void setRegionState(Settings *s, int ntiles, size_t nreads, RegionTable *
                     rt->state = 0;
                     // coverage
                     int n = rt->align + rt->insertion + rt->deletion + rt->soft_clip + rt->known_snp;
-                    // coverage - mark spare bins
+                    // coverage - mark sparse bins
                     if (n < s->region_min_count) rt->state |= REGION_STATE_COVERAGE;
                     // correct for sparse bins by assuming ALL bins have atleast region_min_count clusters
                     n = max(n, s->region_min_count);
