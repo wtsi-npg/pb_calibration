@@ -1,6 +1,6 @@
 dnl Process this file with autoconf to produce a configure script.
 AC_INIT(pb_cal, 8.0.0)
-AM_CONFIG_HEADER(pb_config.h)
+AC_CONFIG_HEADERS(pb_config.h)
 AM_INIT_AUTOMAKE
 AM_MAINTAINER_MODE
 
@@ -12,6 +12,7 @@ AC_PROG_RANLIB
 dnl C language features
 AX_CFLAGS_WARN_ALL
 AC_C_INLINE
+AC_PROG_CC_C99
 
 dnl Functions
 AX_FUNC_ASPRINTF
