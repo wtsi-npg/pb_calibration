@@ -10,7 +10,7 @@ AC_EGREP_CPP([asprintf],[#define _GNU_SOURCE
 ])
 AS_IF([test "x$_asprintf_needs_gnu_source" = "xyes"],
 [AC_DEFINE([ASPRINTF_NEEDS_GNU_SOURCE], [1], [asprintf needs _GNU_SOURCE])])
-AC_LINK_IFELSE(AC_LANG_PROGRAM([[
+AC_LINK_IFELSE([AC_LANG_PROGRAM([[
 #ifdef ASPRINTF_NEEDS_GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -19,7 +19,7 @@ AC_LINK_IFELSE(AC_LANG_PROGRAM([[
 [[
 char *str;
 return asprintf(&str, "foo%d", 1);
-]]),
+]])],
 [AC_MSG_RESULT([yes])
 AC_DEFINE([HAVE_ASPRINTF], [1], [Have asprintf])
 ],
