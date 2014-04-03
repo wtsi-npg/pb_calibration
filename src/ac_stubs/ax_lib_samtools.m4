@@ -127,7 +127,7 @@ AC_DEFUN([AX_LIB_SAMTOOLS],
       else
 	  samtools_exe="$SAMTOOLS_ROOT/samtools"
       fi
-      
+
       SAMTOOLS_VERSION=`$samtools_exe 2>&1 | sed -n 's/Version: *\(.*\)/\1/p'`
 
       v1=`expr "$1" : '\([[0-9]]*\)'`
@@ -144,7 +144,7 @@ AC_DEFUN([AX_LIB_SAMTOOLS],
           AC_MSG_RESULT([yes])
           AC_SUBST([SAMTOOLS_VERSION])
       else
-          AC_MSG_RESULT([no])
+          AC_MSG_RESULT([no wanted $want_vers got $have_vers])
 	  samtools_ok="no"
       fi
   fi

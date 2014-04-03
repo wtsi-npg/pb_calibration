@@ -60,6 +60,7 @@
 #ifdef HAVE_PREAD
 # define _XOPEN_SOURCE 500 // for pread
 #endif
+#define _C99_SOURCE // for snprintf
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
