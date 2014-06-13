@@ -1,6 +1,6 @@
 dnl Process this file with autoconf to produce a configure script.
 AC_INIT(pb_cal, 8.0.0)
-AM_CONFIG_HEADER(pb_config.h)
+AC_CONFIG_HEADERS(pb_config.h)
 AM_INIT_AUTOMAKE
 AM_MAINTAINER_MODE
 
@@ -12,6 +12,7 @@ AC_PROG_RANLIB
 dnl C language features
 AX_CFLAGS_WARN_ALL
 AC_C_INLINE
+AC_PROG_CC_C99
 
 dnl Functions
 AX_FUNC_ASPRINTF
@@ -29,4 +30,4 @@ AX_LIB_IO_LIB(1.12.1,
 AX_LIB_ZLIB(,[have_zlib=yes], [AC_MSG_ERROR([Abort: no zlib. Please rerun configure using the --with-zlib=DIR option.])])
 AX_LIB_SAMTOOLS(0.1.3,[have_bam=yes],[AC_MSG_ERROR([Abort: no samtools. Please rerun configure using the ---with-samtools=DIR option.])])
 
-AC_OUTPUT(Makefile shared/Makefile calibration_pu/Makefile predictor_pu/Makefile spatial_filter/Makefile)
+AC_OUTPUT(Makefile shared/Makefile calibration_pu/Makefile predictor_pu/Makefile spatial_filter/Makefile error_analysis/Makefile)

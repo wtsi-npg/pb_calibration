@@ -3,6 +3,7 @@
 #define NUM_SUBST  1<<(2*LEN_SUBST)
 #define LEN_CNTXT  3
 #define NUM_CNTXT  1<<(2*LEN_CNTXT)
+#define LEN_HOMOP  4
 
 int *reverse_int(int *num, int n);
 char *reverse_seq(char *seq);
@@ -17,3 +18,5 @@ char *get_real_path_name(const char*);
 char *get_command_line(int argc, char **argv);
 int str2word(char *seq, int NH);
 char *word2str(int word, int NH);
+int int_cmp(const void *t1, const void *t2);
+int int_sort(const void *t1, const void *t2);
