@@ -27,7 +27,7 @@
 #
 # LICENSE
 #
-#   Copyright (c) 2009 James Bonfield <jkb@sanger.ac.uk>
+#   Copyright (c) 2009,2013 James Bonfield <jkb@sanger.ac.uk>
 #
 #   Copying and distribution of this file, with or without
 #   modification, are permitted in any medium without royalty
@@ -49,12 +49,13 @@ AC_DEFUN([AX_LIB_SAMTOOLS],
   # Check if it's a working library
   samtools_ok=no
   _cppflags=$CPPFLAGS
-  _ldflags=$LDFLAGS
   _libs=$LIBS
+  for extra_lib in "" "-lm -lpthread"
+  do
   if test "x$SAMTOOLS_ROOT" != "x"
   then
       CPPFLAGS="$_cppflags -I${SAMTOOLS_ROOT}/include"
-      LDFLAGS="$_ldflags -L${SAMTOOLS_ROOT}/lib -lbam $ZLIB_LDFLAGS"
+      LIBS="$_libs -L${SAMTOOLS_ROOT}/lib -lbam $ZLIB_LDFLAGS $extra_lib"
       AC_LANG_PUSH([C])
       AC_SEARCH_LIBS(bam_header_read, bam,
   	  [AC_CHECK_HEADER(bam.h, samtools_ok=yes, samtools_ok=no)])
@@ -62,13 +63,14 @@ AC_DEFUN([AX_LIB_SAMTOOLS],
 
       if test "$samtools_ok" == "yes"
       then
-          SAMTOOLS_LDFLAGS="-L${SAMTOOLS_ROOT}/lib -lbam $ZLIB_LDFLAGS"
+          SAMTOOLS_LDFLAGS="-L${SAMTOOLS_ROOT}/lib -lbam $ZLIB_LDFLAGS $extra_lib"
   	  SAMTOOLS_CFLAGS="-I${SAMTOOLS_ROOT}/include"
+          break
       else
   	  # Maybe DIR is a source/build directory instead of an install dir.
   	  # So try again
   	  CPPFLAGS="$_cppflags -I${SAMTOOLS_ROOT}"
-  	  LDFLAGS="$_ldflags -L${SAMTOOLS_ROOT} -lbam $ZLIB_LDFLAGS" 
+	  LIBS="$_libs -L${SAMTOOLS_ROOT} -lbam $ZLIB_LDFLAGS $extra_lib" 
 	  AC_LANG_PUSH([C])
   	  AC_LANG_C
 
@@ -79,18 +81,19 @@ AC_DEFUN([AX_LIB_SAMTOOLS],
   	  
   	  if test "$samtools_ok" == "yes"
           then
-              SAMTOOLS_LDFLAGS="-L${SAMTOOLS_ROOT} -lbam $ZLIB_LDFLAGS"
+              SAMTOOLS_LDFLAGS="-L${SAMTOOLS_ROOT} -lbam $ZLIB_LDFLAGS $extra_lib"
   	      SAMTOOLS_CFLAGS="-I${SAMTOOLS_ROOT}"
+              break
           else
               # Backout and whinge
               CPPFLAGS=$_cppflags
-              LDFLAGS=$_ldflags
+	      LIBS=$_libs
               AC_MSG_WARN([--with-samtools specified, but non-functioning])
   	  fi
       fi
   else
       # Maybe it works "out of the box"?
-      LDFLAGS="$_ldflags -lbam $ZLIB_LDFLAGS"
+      LIBS="$_libs -lbam $ZLIB_LDFLAGS $extra_lib"
 
       AC_LANG_PUSH([C])
       AC_CHECK_LIB(bam, bam_header_read,
@@ -99,14 +102,15 @@ AC_DEFUN([AX_LIB_SAMTOOLS],
 
       if test "$samtools_ok" = "yes"
       then
-          SAMTOOLS_LDFLAGS="-lbam $ZLIB_LDFLAGS"
+          SAMTOOLS_LDFLAGS="-lbam $ZLIB_LDFLAGS $extra_lib"
           SAMTOOLS_CFLAGS=
+          break
       fi
   fi
+  done
 
   # Backout of variable changes
   CPPFLAGS=$_cppflags
-  LDFLAGS=$_ldflags
   LIBS=$_libs
 
   # Check version number
@@ -123,8 +127,8 @@ AC_DEFUN([AX_LIB_SAMTOOLS],
       else
 	  samtools_exe="$SAMTOOLS_ROOT/samtools"
       fi
-      
-      SAMTOOLS_VERSION=`$samtools_exe 2>&1 | sed -n 's/Version: *\(.*\)( *.*)/\1/p'`
+
+      SAMTOOLS_VERSION=`$samtools_exe 2>&1 | sed -n 's/Version: *\(.*\)/\1/p'`
 
       v1=`expr "$1" : '\([[0-9]]*\)'`
       v2=`expr "$1" : '[[0-9]]*\.\([[0-9]]*\)'`
@@ -140,7 +144,7 @@ AC_DEFUN([AX_LIB_SAMTOOLS],
           AC_MSG_RESULT([yes])
           AC_SUBST([SAMTOOLS_VERSION])
       else
-          AC_MSG_RESULT([no])
+          AC_MSG_RESULT([no wanted $want_vers got $have_vers])
 	  samtools_ok="no"
       fi
   fi
@@ -174,6 +178,5 @@ AC_DEFUN([AX_LIB_SAMTOOLS],
   # Tidy up
   unset samtools_ok
   unset _cppflags
-  unset _ldflags
   unset _libs
 ])
