@@ -32,6 +32,7 @@ typedef struct {
     int nregions_y;
     int nreads;
     int readLength[N_READS];
+    int totalReadLength;
     char *cmdLine;
     int ncomments;
     char *comments[N_COMMENTS];
@@ -54,7 +55,7 @@ void writeHeader(FILE *fp, Header *hdr);
 void addHeaderComment(Header *hdr, char *comment);
 void readHeader(FILE *fp, Header *hdr);
 void readFilterData(FILE *fp, Header *hdr);
-char getFilterData(int tile, int read, int cycle, int region);
+char* getFilterData(int tile, int read, int cycle, int region);
 
 int x2region(int x, int region_size);
 int xy2region(int x, int y, int region_size, int nregions_x, int nregions_y);
