@@ -147,7 +147,6 @@ typedef struct {
 	char *working_dir;
 	char *output;
 	int read_length[3];
-	int dump;
 	int calculate;
 	char *tileviz;
 	int apply;
@@ -351,7 +350,6 @@ static void tileviz(Settings *s, int ntiles, RegionTable ***rts)
     char *filename;
     FILE *fp;
     int image, iregion, ix, iy, read, itile, cycle;
-    RegionTable summary_rts[ntiles*N_READS][s->nregions_x][s->nregions_y];
 
     if (0 >= ntiles)
         return;
@@ -387,47 +385,7 @@ static void tileviz(Settings *s, int ntiles, RegionTable ***rts)
         base++;
     }
     
-    // create the summary region tables, marking as bad any regions which would be removed or marked as qc failed when the filter is applied
-    for (read = 0; read < N_READS; read++) {
-        if (0 == s->read_length[read]) continue;
-        for (itile=0; itile<ntiles; itile++) {
-            iregion = 0;
-            for (ix = 0; ix < s->nregions_x; ix++) {
-                for (iy = 0; iy < s->nregions_y; iy++) {
-                    RegionTable *summary_rt = &summary_rts[itile*N_READS+read][ix][iy];
-                    initialiseRegionTable(summary_rt);
-                    if (s->regions[iregion] >= 0) {
-                        int bad_cycle_count = 0;
-                        // summary quality is the minimum average quality, initialise to a large value
-                        summary_rt->quality = 100.0;
-                        for (cycle = 0; cycle < s->read_length[read]; cycle++) {
-                            RegionTable *rt = rts[itile*N_READS+read][cycle] + s->regions[iregion];
-                            int n = rt->align + rt->insertion + rt->deletion + rt->soft_clip + rt->known_snp;
-                            // coverage should be the same for all cycles
-                            summary_rt->align = n;
-                            if (0 == summary_rt->align) continue;
-                            // for quality values calculate an average value
-                            rt->quality /= n;
-                            // ignore the last cycle of any read which has a higher error rate and lower quality values
-                            // ignore first cycle of the reverse read which has a high error rate and lower quality values due to library prep
-                            if( (read == 2 && cycle == 0) || (cycle == (s->read_length[read]-1)) ) continue;
-                            // for mismatch, insertion and deletion take the maximum over all cycles
-                            summary_rt->mismatch = max(summary_rt->mismatch, rt->mismatch);
-                            summary_rt->insertion = max(summary_rt->insertion, rt->insertion);
-                            summary_rt->deletion = max(summary_rt->deletion, rt->deletion);
-                            // for quality values take the minimum over all cycles
-                            summary_rt->quality = min(summary_rt->quality, rt->quality);
-  			                if (rt->state & REGION_STATE_MASK) bad_cycle_count++;
-                        }
-                        if (bad_cycle_count) summary_rt->state |= REGION_STATE_BAD;
-                    }
-                    iregion++;
-                }
-            }
-        }
-    }
-
-    // create summary images
+    // create the summary images, marking as bad any regions which would be removed or marked as qc failed when the filter is applied
     for (read = 0; read < N_READS; read++) {
         if (0 == s->read_length[read]) continue;
 
@@ -442,46 +400,78 @@ static void tileviz(Settings *s, int ntiles, RegionTable ***rts)
             int surf = 1;
             int col = 1;
             int row = 1;
+
             if( 1 < ntiles ){
                 surf = tile / 1000;
                 col = (tile - 1000 * surf) / 100;
                 row = tile % 100;
             }
 
+            iregion = 0;
             for (ix = 0; ix < s->nregions_x; ix++) {
                 for (iy = 0; iy < s->nregions_y; iy++) {
-                    RegionTable *rt = &summary_rts[itile*N_READS+read][ix][iy];
-                    int x = (surf-1) * (s->nregions_x * num_cols + IMAGE_COLUMN_GAP) + (col-1) * s->nregions_x + ix;
-                    int y = IMAGE_LABEL_HEIGHT + (row-1) * (s->nregions_y + 1) + iy;
-                    int n = rt->align;
-                    if (n) {
-                        int colour = (n > COLOUR_LEVEL_11 ? COLOUR_LEVEL_11 : n);
-                        // mark bad regions with COLOUR_QC_FAIL in coverage image
-                        if (rt->state & REGION_STATE_BAD) colour = COLOUR_QC_FAIL;
-                        gdImageSetPixel(im[IMAGE_COVERAGE],  x, y, colour_table[colour]);
-                        // for mismatch, insertion and deletion convert to a percentage and bin 0(0%), 1(10%), .. 10(100%)
-                        colour = (10.0 * rt->deletion) / n + (rt->deletion ? 1 : 0);
-                        gdImageSetPixel(im[IMAGE_DELETION],  x, y, colour_table[colour]);
-                        colour = (10.0 * rt->insertion) / n + (rt->insertion ? 1 : 0);
-                        gdImageSetPixel(im[IMAGE_INSERTION], x, y, colour_table[colour]);
-                        colour = (10.0 * rt->mismatch) / n + (rt->mismatch ? 1 : 0);
-                        gdImageSetPixel(im[IMAGE_MISMATCH],  x, y, colour_table[colour]);
-                        // for quality use thresholds >30, >15, >=5 and <5
-                        if (rt->quality > 30) {
-                            colour = COLOUR_HIGH_QUAL;
-                        } else if (rt->quality > 15) {
-                            colour = COLOUR_MEDIUM_QUAL;
-                        } else if (rt->quality < 5) {
-                            colour = COLOUR_ZERO_QUAL;
-                        } else {
-                            colour = COLOUR_LOW_QUAL;
+                    if (s->regions[iregion] >= 0) {
+                        RegionTable summary_rt;
+                        initialiseRegionTable(&summary_rt);
+
+                        int bad_cycle_count = 0;
+                        // summary quality is the minimum average quality, initialise to a large value
+                        summary_rt.quality = 100.0;
+                        for (cycle = 0; cycle < s->read_length[read]; cycle++) {
+                            RegionTable *rt = rts[itile*N_READS+read][cycle] + s->regions[iregion];
+                            int n = rt->align + rt->insertion + rt->deletion + rt->soft_clip + rt->known_snp;
+                            if (0 == n) continue;
+                            // coverage should be the same for all cycles
+                            summary_rt.align = n;
+                            // for quality values calculate an average value
+                            rt->quality /= n;
+                            // ignore the last cycle of any read which has a higher error rate and lower quality values
+                            // ignore first cycle of the reverse read which has a high error rate and lower quality values due to library prep
+                            if( (read == 2 && cycle == 0) || (cycle == (s->read_length[read]-1)) ) continue;
+                            // for mismatch, insertion and deletion take the maximum over all cycles
+                            summary_rt.mismatch = max(summary_rt.mismatch, rt->mismatch);
+                            summary_rt.insertion = max(summary_rt.insertion, rt->insertion);
+                            summary_rt.deletion = max(summary_rt.deletion, rt->deletion);
+                            // for quality values take the minimum over all cycles
+                            summary_rt.quality = min(summary_rt.quality, rt->quality);
+  			    if (rt->state & REGION_STATE_MASK) bad_cycle_count++;
                         }
-                        gdImageSetPixel(im[IMAGE_QUALITY],  x, y, colour_table[colour]);
+                        if (bad_cycle_count) summary_rt.state |= REGION_STATE_BAD;
+
+                        int n = summary_rt.align;
+                        if (n) {
+                            int x = (surf-1) * (s->nregions_x * num_cols + IMAGE_COLUMN_GAP) + (col-1) * s->nregions_x + ix;
+                            int y = IMAGE_LABEL_HEIGHT + (row-1) * (s->nregions_y + 1) + iy;
+                            int colour = (n > COLOUR_LEVEL_11 ? COLOUR_LEVEL_11 : n);
+                            // mark bad regions with COLOUR_QC_FAIL in coverage image
+                            if (summary_rt.state & REGION_STATE_BAD) colour = COLOUR_QC_FAIL;
+                            gdImageSetPixel(im[IMAGE_COVERAGE],  x, y, colour_table[colour]);
+                            // for mismatch, insertion and deletion convert to a percentage and bin 0(<=0), 1(<=10%), 2(<=20), ...
+                            colour = (10.0 * summary_rt.deletion) / n + (summary_rt.deletion ? 1 : 0);
+                            gdImageSetPixel(im[IMAGE_DELETION],  x, y, colour_table[colour]);
+                            colour = (10.0 * summary_rt.insertion) / n + (summary_rt.insertion ? 1 : 0);
+                            gdImageSetPixel(im[IMAGE_INSERTION], x, y, colour_table[colour]);
+                            colour = (10.0 * summary_rt.mismatch) / n + (summary_rt.mismatch ? 1 : 0);
+                            gdImageSetPixel(im[IMAGE_MISMATCH],  x, y, colour_table[colour]);
+                            // for quality use thresholds >30, >15, >=5 and <5
+                            if (summary_rt.quality > 30) {
+                                colour = COLOUR_HIGH_QUAL;
+                            } else if (summary_rt.quality > 15) {
+                                colour = COLOUR_MEDIUM_QUAL;
+                            } else if (summary_rt.quality < 5) {
+                                colour = COLOUR_ZERO_QUAL;
+                            } else {
+                                colour = COLOUR_LOW_QUAL;
+                            }
+                            gdImageSetPixel(im[IMAGE_QUALITY],  x, y, colour_table[colour]);
+                        }
                     }
+
+                    iregion++;
                 }
             }
         }
-            
+
         for (image=0; image<N_IMAGES; image++) {
             sprintf(filename, "%s/%c_%s.png", s->tileviz, (read == 2 ? 'R' : 'F'), image_names[image]);
             fp = fopen(filename, "w+");
@@ -521,12 +511,12 @@ static void tileviz(Settings *s, int ntiles, RegionTable ***rts)
                     for (iy = 0; iy < s->nregions_y; iy++) {
                         if (s->regions[iregion] >= 0) {
                             RegionTable *rt = rts[itile*N_READS+read][cycle] + s->regions[iregion];
-                            int x = (surf-1) * (s->nregions_x * num_cols + IMAGE_COLUMN_GAP) + (col-1) * s->nregions_x + ix;
-                            int y = IMAGE_LABEL_HEIGHT + (row-1) * (s->nregions_y + 1) + iy;
-                            int n = summary_rts[itile*N_READS+read][ix][iy].align;
+                            int n = rt->align;
                             if (n) {
+                                int x = (surf-1) * (s->nregions_x * num_cols + IMAGE_COLUMN_GAP) + (col-1) * s->nregions_x + ix;
+                                int y = IMAGE_LABEL_HEIGHT + (row-1) * (s->nregions_y + 1) + iy;
                                 int colour;
-                                // for mismatch, insertion and deletion convert to a percentage and bin 0(0%), 1(10%), .. 10(100%)
+                                // for mismatch, insertion and deletion convert to a percentage and bin 0(<=0), 1(<=10%), 2(<=20), ...
                                 colour = (10.0 * rt->deletion) / n + (rt->deletion ? 1 : 0);
                                 gdImageSetPixel(im[IMAGE_DELETION],  x, y, colour_table[colour]);
                                 colour = (10.0 * rt->insertion) / n + (rt->insertion ? 1 : 0);
@@ -608,17 +598,15 @@ static int setScaleFactor(Settings *s, int ntiles, size_t nreads, RegionTable **
 	if (0 >= ntiles)
 		return scale_factor;
 
-    if (0 == s->region_min_count) {
-        // set the region_min_count so that at least 2 reads are required to pass all thresholds
-        if ((region_min_count * s->region_mismatch_threshold) < 2.0 )
-            region_min_count = ceil(2.0 / s->region_mismatch_threshold);
-        if ((region_min_count * s->region_insertion_threshold) < 2.0 )
-            region_min_count = ceil(2.0 / s->region_insertion_threshold);
-        if ((region_min_count * s->region_deletion_threshold) < 2.0 )
-            region_min_count = ceil(2.0 / s->region_deletion_threshold);
-        display("State region: region_min_count to %d\n", region_min_count);
-        s->region_min_count = region_min_count;
-    }
+    // set the region_min_count so that at least 2 reads are required to pass all thresholds
+    if ((region_min_count * s->region_mismatch_threshold) < 2.0 )
+        region_min_count = ceil(2.0 / s->region_mismatch_threshold);
+    if ((region_min_count * s->region_insertion_threshold) < 2.0 )
+        region_min_count = ceil(2.0 / s->region_insertion_threshold);
+    if ((region_min_count * s->region_deletion_threshold) < 2.0 )
+        region_min_count = ceil(2.0 / s->region_deletion_threshold);
+    display("State region: region_min_count=%d\n", region_min_count);
+    s->region_min_count = region_min_count;
 
     int region_size = s->region_size;
     int nregions_x = s->nregions_x;
@@ -627,8 +615,8 @@ static int setScaleFactor(Settings *s, int ntiles, size_t nreads, RegionTable **
 
     // what is the average #reads per region, assume coverage is reasonably uniform over the whole lane
     int region_count = (float)nreads / (float)(ntiles * nregions);
-    display("State region: nregions_x=%d nregions_y=%d nregions=%d region_size=%d region_count=%d region_min_count=%d\n",
-            nregions_x, nregions_y, nregions, region_size, region_count, s->region_min_count);
+    display("State region: nregions_x=%d nregions_y=%d nregions=%d region_size=%d region_count=%d\n",
+            nregions_x, nregions_y, nregions, region_size, region_count);
 
     // increase the region size until at the average region count exceeds the minimum region count
     while ( region_count < s->region_min_count ){
@@ -638,8 +626,8 @@ static int setScaleFactor(Settings *s, int ntiles, size_t nreads, RegionTable **
         nregions_y = ceil((float)s->nregions_y / (float)scale_factor);
         nregions = nregions_x * nregions_y;
         region_count = (float)nreads / (float)(ntiles * nregions);
-        display("State region: nregions_x=%d nregions_y=%d nregions=%d region_size=%d region_count=%d region_min_count=%d\n",
-                nregions_x, nregions_y, nregions, region_size, region_count, s->region_min_count);
+        display("State region: nregions_x=%d nregions_y=%d nregions=%d region_size=%d region_count=%d\n",
+                nregions_x, nregions_y, nregions, region_size, region_count);
     }
 
 	return scale_factor;
@@ -804,6 +792,132 @@ static void setRegionState(Settings *s, int ntiles, size_t nreads, RegionTable *
 	}
 }
 
+static float calcStateQuality(RegionTable *rt, int state)
+{
+    float ssc = 1.0;
+    int state_count = 0;
+    float q;
+
+    switch (state) {
+        case REGION_STATE_MISMATCH:
+            state_count += rt->mismatch;
+            break;
+        case REGION_STATE_INSERTION:
+            state_count += rt->insertion;
+            break;
+        case REGION_STATE_DELETION:
+            state_count += rt->deletion;
+            break;
+        default:
+            display("calQuality: unknown state %d\n", state);
+            exit(1);
+            break;
+    }
+
+    q = -10.0 * log10((state_count + ssc)/(rt->align + ssc));
+
+    return q;
+}
+
+/*
+* identify bad tiles metric < mean metric - filter * stdev metric
+*
+* where metric is one of mismatch, insertion, deletion, soft_clip or known_snp
+*
+* filter is typically 2.
+*/
+
+static void findBadTiles(Settings *s, int ntiles, RegionTable ***rts)
+{
+    int tile_state[] = {REGION_STATE_MISMATCH,REGION_STATE_INSERTION,REGION_STATE_DELETION};
+    char *state_str[] = {"mismatch", "insertion", "deletion"};
+    int n_states = 3;
+    int filter = 2;
+    RegionTable *tile_rts[ntiles*N_READS];
+    float q[ntiles];
+    int itile, read, cycle, iregion, state;
+    
+    if (0 >= ntiles)
+        return;
+
+    // create the tile region tables
+    for (itile=0; itile<ntiles; itile++) {
+        for (read = 0; read < N_READS; read++) {
+            tile_rts[itile*N_READS+read] = NULL;
+            if (0 == s->read_length[read]) continue;
+            tile_rts[itile*N_READS+read] = smalloc(s->read_length[read] * sizeof(RegionTable));
+            for(cycle=0;cycle<s->read_length[read];cycle++) {
+                RegionTable *tile_rt = tile_rts[itile*N_READS+read] + cycle;
+                initialiseRegionTable(tile_rt);
+                for (iregion=0; iregion<s->nregions; iregion++) {
+                    RegionTable *rt = rts[itile*N_READS+read][cycle] + s->regions[iregion];
+                    int n = rt->align + rt->insertion + rt->deletion + rt->soft_clip + rt->known_snp;
+                    tile_rt->align += n;
+                    tile_rt->mismatch += rt->mismatch;
+                    tile_rt->insertion += rt->insertion;
+                    tile_rt->deletion  += rt->deletion;
+                }
+            }
+        }
+    }
+
+    for (read = 0; read < N_READS; read++) {
+        if (0 == s->read_length[read]) continue;
+        for (cycle = 0; cycle < s->read_length[read]; cycle++) {
+            for (state = 0; state < n_states; state++) {
+                float qsum = 0.0;
+                float q2sum = 0.0;
+                float qmax = -1.0;
+                int nq = 0;
+
+                for (itile=0; itile<ntiles; itile++) {
+                    RegionTable *rt = rts[itile*N_READS+read][cycle];
+                    q[itile] = calcStateQuality(rt, tile_state[state]);
+                    qmax = (q[itile] > qmax ? q[itile] : qmax);
+                }
+
+                float qavg, q2avg, qstd, qmin;
+
+                /* flag tiles with q < qmax-20, i.e. error rate 100 * min error rate */
+                qmin = max(qmax - 20.0, 0.0);
+
+                for (itile=0; itile<ntiles; itile++) {
+                    if( q[itile] < qmin ) {
+                        continue;
+                    } else {
+                        qsum += q[itile];
+                        q2sum += q[itile] * q[itile];
+                        nq++;
+                    }
+                }
+
+                assert(nq > 0);
+
+                qavg = qsum / nq;
+                q2avg = q2sum / nq;
+                qstd = sqrt(q2avg - qavg * qavg);
+                qmin = qavg - filter * qstd;
+
+                display("read=%1d cycle=%-3d state=%s qavg=%.2f qstd=%.2f qmax=%.2f qmin=%.2f ", read, cycle, state_str[state], qavg, qstd, qmax, qmin);
+                for(itile=0;itile<ntiles;itile++) {
+   		            int tile = s->tileArray[itile];
+                    if (q[itile] < qmin)
+                        display("%4d* %5.2f ", tile, q[itile]);
+                    else
+                        display("%4d  %5.2f ", tile, q[itile]);
+                }
+                display("\n");
+            }
+        }
+    }
+
+    for (itile=0; itile<ntiles; itile++)
+        for (read = 0; read < N_READS; read++)
+            if (NULL != tile_rts[itile*N_READS+read]) free(tile_rts[itile*N_READS+read]);
+
+    return;
+}
+
 void printFilter(Settings *s, int ntiles, RegionTable ***rts) 
 {
 	FILE *fp;
@@ -848,76 +962,6 @@ void printFilter(Settings *s, int ntiles, RegionTable ***rts)
 	}
 
 	fclose(fp);
-}
-
-/*
- * cts - parse bam file line
- *
- * returns 0 on success, 1 on expected failure.
- */
-int dump_bam_file(Settings *s, samfile_t *fp_bam, size_t *nreads)
-{
-
-	size_t nreads_bam = 0;
-
-	static const int bam_read_buff_size = 1024;
-	char bam_read_seq[bam_read_buff_size];
-	int bam_read_qual[bam_read_buff_size];
-	int bam_read_mismatch[bam_read_buff_size];
-
-	bam1_t *bam = bam_init1();
-
-	/* loop over reads in the bam file */
-	while (1) {
-		int bam_lane = -1, bam_tile = -1, bam_read = -1, bam_x = -1, bam_y = -1;
-
-		if (parse_bam_readinfo(fp_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, NULL)) {
-			/* break on end of BAM file */
-			break;
-		}
-
-		if (BAM_FUNMAP & bam->core.flag) continue;
-
-		parse_bam_alignments(fp_bam, bam, bam_read_seq, bam_read_qual, NULL, bam_read_mismatch,
-                                                  bam_read_buff_size, s->snp_hash);
-
-		char *name = bam1_qname(bam);
-		uint8_t *oq_ptr;
-		char *oq = NULL;
-		int i;
-
-		oq_ptr = bam_aux_get(bam, "OQ");
-		if (NULL != oq_ptr) {
-			oq = bam_aux2Z(oq_ptr);
-			if (NULL == oq) {
-				die("ERROR: Invalid original qualities %s for read: \"%s\"\n", oq, name);
-			}
-			if (BAM_FREVERSE & bam->core.flag)
-				oq = reverse_seq(oq);
-		}
-
-		printf("%s\t%d\t%s", name, bam->core.flag, bam_read_seq);
-		/* stringify quality values and mismatch bitmap into read_seq */
-		for (i = 0; i < bam->core.l_qseq; i++)
-			bam_read_seq[i] = bam_read_qual[i] + PHRED_QUAL_OFFSET;
-		printf("\t%s", bam_read_seq);
-		for (i = 0; i < bam->core.l_qseq; i++)
-			bam_read_seq[i] =
-			    bam_read_mismatch[i] + PHRED_QUAL_OFFSET;
-		printf("\t%s", bam_read_seq);
-		if (NULL != oq) {
-			printf("\t%s", oq);
-		}
-		printf("\n");
-
-		nreads_bam++;
-	}
-
-	bam_destroy1(bam);
-
-	*nreads = nreads_bam;
-
-	return 0;
 }
 
 static int findRegion(Settings *s, RegionTable ***rts, int ntiles, int x, int y)
@@ -972,7 +1016,7 @@ static int findRegion(Settings *s, RegionTable ***rts, int ntiles, int x, int y)
      return iregion;
 }
 
-static void updateRegionTable(Settings *s, RegionTable ***rts, int read, int iregion, int *read_qual, char *oq, int *read_mismatch)
+static void updateRegionTable(Settings *s, RegionTable ***rts, int read, int iregion, int *read_qual, int *read_mismatch)
 {
     /* update region table */
 	int cycle;
@@ -1057,6 +1101,29 @@ RegionTable ***makeRegionTable(Settings *s, samfile_t *fp_bam, int *bam_ntiles, 
 			break;	/* break on end of BAM file */
 		}
 
+        read_length = bam->core.l_qseq;
+        if (0 == s->read_length[bam_read]) {
+            s->read_length[bam_read] = read_length;
+        }
+
+        if (s->read_length[bam_read] != read_length) {
+            fprintf(stderr,
+                    "Error: inconsistent read lengths "
+                    "within bam file for read %d.\n"
+                    "have length %ld, previously it was %d.\n",
+                    bam_read, (long) read_length, s->read_length[bam_read]);
+            exit(EXIT_FAILURE);
+        }
+
+        if (lane == -1) {
+            lane = bam_lane;
+        }
+        if (bam_lane != lane){
+            fprintf(stderr,"Error: Inconsistent lane.\n");
+            fprintf(stderr,"Bam lane %d qseq lane %d.\n",bam_lane, lane);
+            exit(EXIT_FAILURE);
+        }
+
 		if (BAM_FUNMAP & bam->core.flag) continue;
 		if (BAM_FQCFAIL & bam->core.flag) continue;
 		if (BAM_FPAIRED & bam->core.flag) {
@@ -1067,38 +1134,6 @@ RegionTable ***makeRegionTable(Settings *s, samfile_t *fp_bam, int *bam_ntiles, 
         
 		parse_bam_alignments(fp_bam, bam, bam_read_seq, bam_read_qual, NULL, bam_read_mismatch,
                                                   bam_read_buff_size, s->snp_hash);
-
-		char *name = bam1_qname(bam);
-		uint8_t *oq_ptr;
-		char *oq = NULL;
-
-		oq_ptr = bam_aux_get(bam, "OQ");
-		if (NULL != oq_ptr) {
-			oq = bam_aux2Z(oq_ptr);
-			if (NULL == oq) {
-				die("ERROR: Invalid original qualities %s for read: \"%s\"\n", oq, name);
-			}
-			if (BAM_FREVERSE & bam->core.flag)
-				oq = reverse_seq(oq);
-		}
-
-		read_length = strlen(bam_read_seq);
-		if (0 == s->read_length[bam_read]) {
-			s->read_length[bam_read] = read_length;
-		}
-
-		if (s->read_length[bam_read] != read_length) {
-			die("Error: inconsistent read lengths within bam file for read %d.\nHave length %ld, previously it was %d.\n",
-			    bam_read, (long)read_length,
-			    s->read_length[bam_read]);
-		}
-
-		if (lane == -1) {
-			lane = bam_lane;
-		}
-		if (bam_lane != lane) {
-			die("Error: Inconsistent lane within bam file.\nHave %d, previously it was %d.\n", bam_lane, lane);
-		}
 
         // lookup itile from tile in tile array
         size_t nelem = ntiles;
@@ -1121,7 +1156,7 @@ RegionTable ***makeRegionTable(Settings *s, samfile_t *fp_bam, int *bam_ntiles, 
 
         if (NULL == rts[itile*N_READS+bam_read]) {
             int cycle, iregion;
-            rts[itile*N_READS+bam_read] = smalloc(read_length * sizeof(HashTable *));
+            rts[itile*N_READS+bam_read] = smalloc(read_length * sizeof(RegionTable *));
             for(cycle=0;cycle<read_length;cycle++) {
                 rts[itile*N_READS+bam_read][cycle] = smalloc(s->nregions * sizeof(RegionTable));
                 for(iregion=0;iregion<s->nregions;iregion++) {
@@ -1132,7 +1167,7 @@ RegionTable ***makeRegionTable(Settings *s, samfile_t *fp_bam, int *bam_ntiles, 
         }
 
         int iregion = findRegion(s, rts, ntiles, bam_x, bam_y);
-        updateRegionTable(s, &rts[itile*N_READS], bam_read, iregion, bam_read_qual, oq, bam_read_mismatch);
+        updateRegionTable(s, &rts[itile*N_READS], bam_read, iregion, bam_read_qual, bam_read_mismatch);
 
         nreads++;
 	}
@@ -1197,25 +1232,24 @@ int filter_bam(Settings * s, samfile_t * fp_in_bam, samfile_t * fp_out_bam,
 
 		nreads_bam++;
 
-		char state = 0, bad_cycle_count = 0;
 		int iregion = xy2region(bam_x, bam_y, s->region_size, s->nregions_x, s->nregions_y);
-		int read;
+		char* state = getFilterData(bam_tile, 0, 0, iregion);
+		int read, cycle, bad_cycle_count = 0;
 		for (read = 0; read < N_READS; read++) {
-			int cycle;
 			for (cycle = 0; cycle < s->read_length[read]; cycle++) {
-				state = getFilterData(bam_tile, read, cycle, iregion);
-				if (state & REGION_STATE_MASK)
-                                        bad_cycle_count++;
-  		        }
+				if (*state & REGION_STATE_MASK)
+                    bad_cycle_count++;
+                state += s->nregions;
+  	        }
 		}
 
-                if (bad_cycle_count) {
-                        nfiltered_bam++;
- 		        if (s->qcfail) 
-                                bam->core.flag |= BAM_FQCFAIL;
-                        else
-                                continue;
-                }
+        if (bad_cycle_count) {
+            nfiltered_bam++;
+            if (s->qcfail) 
+                bam->core.flag |= BAM_FQCFAIL;
+            else
+                continue;
+        }
 
 		if (0 > samwrite(fp_out_bam, bam)) die("Error: writing bam file\n");
 	}
@@ -1238,7 +1272,6 @@ static void usage(int code)
 		"Usage: spatial_filter [command] [options] bam_file\n"
 		"" "  calculate or apply a spatial filter\n" "");
 	fprintf(usagefp, "  command must be one of:\n");
-	fprintf(usagefp, "    -d         just dump bam file in 'mismatch' format\n");
 	fprintf(usagefp, "    -D         just dump filter file in ascii text format to stdout\n");
 	fprintf(usagefp, "    -c         calculate filter files\n");
 	fprintf(usagefp, "    -a         apply filter files\n");
@@ -1249,9 +1282,6 @@ static void usage(int code)
 	fprintf(usagefp, "               Inhibit all progress messages\n");
 	fprintf(usagefp, "\n");
 	fprintf(usagefp, "  comand specific options:\n");
-	fprintf(usagefp, "\n");
-	fprintf(usagefp, "    dump bam file:\n");
-	fprintf(usagefp, "      none:\n");
 	fprintf(usagefp, "\n");
 	fprintf(usagefp, "    all other commands require:\n");
 	fprintf(usagefp, "      -F --filter file\n");
@@ -1330,6 +1360,10 @@ void calculateFilter(Settings *s)
 
     setRegionState(s, ntiles, nreads, rts);
 
+#if 0
+    findBadTiles(s, ntiles, rts);
+#endif
+    
     if( NULL == s->filter) {
         display("Writing filter to stdout\n");
         s->filter = "/dev/stdout";
@@ -1366,8 +1400,9 @@ void applyFilter(Settings *s)
 	fclose(fp);
 
 	s->region_size = hdr.region_size;
-	s->nregions_x = hdr.nregions_x;
-	s->nregions_y = hdr.nregions_y;
+	s->nregions    = hdr.nregions;
+	s->nregions_x  = hdr.nregions_x;
+	s->nregions_y  = hdr.nregions_y;
 
     for (read=0;read<hdr.nreads;read++)
         s->read_length[read] = hdr.readLength[read];
@@ -1410,28 +1445,6 @@ void applyFilter(Settings *s)
 	checked_chdir(s->working_dir);
 }
 
-void dumpBAM(Settings *s)
-{
-	samfile_t *fp_input_bam;
-		size_t nreads = 0;
-
-		fp_input_bam = samopen(s->in_bam_file, "rb", 0);
-		if (NULL == fp_input_bam) {
-			die("ERROR: can't open bam file %s: %s\n", s->in_bam_file, strerror(errno));
-		}
-
-		if (0 != dump_bam_file(s, fp_input_bam, &nreads)) {
-			die("ERROR: failed to dump bam file %s\n", s->in_bam_file);
-		}
-
-		/* close the bam file */
-		samclose(fp_input_bam);
-
-		if (!s->quiet) {
-			display("Dumped %8lu traces\n", nreads);
-		}
-}
-
 void dumpFilterFile(char *filename, int quiet)
 {
 	FILE *fp;
@@ -1464,12 +1477,14 @@ void dumpFilterFile(char *filename, int quiet)
    	    readFilterData(fp, &hdr);
         for (tile=0; tile<hdr.ntiles; tile++)
             for (read=0; read<hdr.nreads; read++)
-                for (cycle=0; cycle<hdr.readLength[read]; cycle++)
+                for (cycle=0; cycle<hdr.readLength[read]; cycle++) {
+                    char* state = getFilterData(hdr.tileArray[tile], read, cycle, 0);
                     for (region=0; region<hdr.nregions; region++) {
-                        char state = getFilterData(hdr.tileArray[tile], read, cycle, region);
-                        if (state & REGION_STATE_MASK)
+                        if (*state & REGION_STATE_MASK)
                             printf("filtering tile=%d read=%d cycle=%d region=%d\n", hdr.tileArray[tile], read, cycle, region);
+                        state++;
                     }
+                }
     }
 
 	fclose(fp);
@@ -1484,7 +1499,6 @@ int main(int argc, char **argv)
 
 	settings.filter = NULL;
 	settings.quiet = 0;
-	settings.dump = 0;
 	settings.tileviz = NULL;
 	settings.calculate = 0;
 	settings.apply = 0;
@@ -1515,7 +1529,6 @@ int main(int argc, char **argv)
                    {"help", 0, 0, 'h'},
                    {"filter", 1, 0, 'F'},
                    {"version", 0, 0, 'v'},
-                   {"region_min_count", 1, 0, 'm'},
                    {"region_size", 1, 0, 'r'},
                    {"region-size", 1, 0, 'r'},
                    {"region_mismatch_threshold", 1, 0, 'z'},
@@ -1531,7 +1544,6 @@ int main(int argc, char **argv)
 		switch (c) {
 			case 'v':	display("spatial_filter: Version %s\n", version); 
 						exit(0);
-                        case 'd':	settings.dump = 1; ncmd++; break;
 			case 'D':	dumpFilter = 1; ncmd++; break;
 			case 'c':	settings.calculate = 1; ncmd++; break;
                         case 't':	settings.tileviz = optarg; break;
@@ -1541,7 +1553,6 @@ int main(int argc, char **argv)
 			case 'o':	settings.output = optarg;	break;
 			case 's':	settings.snp_file = optarg;	break;
 			case 'F':	settings.filter = optarg;	break;
-			case 'm':	settings.region_min_count = atoi(optarg); break;
 			case 'r':	settings.region_size = atoi(optarg); break;
 			case 'z':	settings.region_mismatch_threshold = atof(optarg); break;
 			case 'b':	settings.region_insertion_threshold = atof(optarg); break;
@@ -1568,8 +1579,6 @@ int main(int argc, char **argv)
 
 	if (settings.calculate) {
    	    if (settings.region_size < 1) die("Error: invalid region size\n");
-
-	    if (settings.region_min_count < 1) display("Warning: region_min_count deprecated");
     }
 
     if (!settings.calculate && settings.tileviz) display("Warning: no tileviz images will be produced\n");
@@ -1584,8 +1593,6 @@ int main(int argc, char **argv)
 		if (settings.filter)                     { strcat(cmd, " -F "); strcat(cmd, settings.filter); }
 		if (settings.tileviz)                    { strcat(cmd, " -t "); strcat(cmd, settings.tileviz); }
 		if (settings.region_size)                { snprintf(arg, 64, " --region_size %d", settings.region_size);
-                                                           strcat(cmd, arg); }
-		if (settings.region_min_count)           { snprintf(arg, 64, " --region_min_count %d", settings.region_min_count);
                                                            strcat(cmd, arg); }
 		if (settings.region_mismatch_threshold)  { snprintf(arg, 64, " --region_mismatch_threshold %-6.4f", settings.region_mismatch_threshold);
                                                            strcat(cmd, arg); }
@@ -1618,9 +1625,6 @@ int main(int argc, char **argv)
 	if (NULL == settings.working_dir) {
 		die("ERROR: can't obtain working directory: %s\n", strerror(errno));
 	}
-
-	/* dump the alignments */
-	if (settings.dump) dumpBAM(&settings);
 
 	/* Dump the filter file */
 	if (dumpFilter) dumpFilterFile(settings.filter, settings.quiet);
