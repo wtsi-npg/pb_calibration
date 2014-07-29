@@ -222,7 +222,7 @@ if [ $spatial_filter ] ; then
 		exit 1
 	fi
 	filtered_bam=$(echo ${output} | sed -r 's/([^/]+)$/filtered_\1/')
-	$tools/spatial_filter -a --filter ${output}.filter -o $filtered_bam $output
+	$tools/spatial_filter -a -f --filter ${output}.filter -o $filtered_bam $output
 	if [ ! -s $filtered_bam ] ; then
 		echo "spatial_filter failed to apply filter and produce $filtered_bam" >&2
 		exit 1
