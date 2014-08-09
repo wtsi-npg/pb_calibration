@@ -1234,21 +1234,23 @@ int filter_bam(Settings * s, samfile_t * fp_in_bam, samfile_t * fp_out_bam,
 
 		int iregion = xy2region(bam_x, bam_y, s->region_size, s->nregions_x, s->nregions_y);
 		char* state = getFilterData(bam_tile, 0, 0, iregion);
-		int read, cycle, bad_cycle_count = 0;
-		for (read = 0; read < N_READS; read++) {
-			for (cycle = 0; cycle < s->read_length[read]; cycle++) {
-				if (*state & REGION_STATE_MASK)
-                    bad_cycle_count++;
-                state += s->nregions;
-  	        }
-		}
+   	    if (state != NULL) {
+            int read, cycle, bad_cycle_count = 0;
+            for (read = 0; read < N_READS; read++) {
+                for (cycle = 0; cycle < s->read_length[read]; cycle++) {
+                    if (*state & REGION_STATE_MASK)
+                        bad_cycle_count++;
+                    state += s->nregions;
+                }
+            }
 
-        if (bad_cycle_count) {
-            nfiltered_bam++;
-            if (s->qcfail) 
-                bam->core.flag |= BAM_FQCFAIL;
-            else
-                continue;
+            if (bad_cycle_count) {
+                nfiltered_bam++;
+                if (s->qcfail) 
+                    bam->core.flag |= BAM_FQCFAIL;
+                else
+                    continue;
+            }
         }
 
 		if (0 > samwrite(fp_out_bam, bam)) die("Error: writing bam file\n");
@@ -1479,10 +1481,12 @@ void dumpFilterFile(char *filename, int quiet)
             for (read=0; read<hdr.nreads; read++)
                 for (cycle=0; cycle<hdr.readLength[read]; cycle++) {
                     char* state = getFilterData(hdr.tileArray[tile], read, cycle, 0);
-                    for (region=0; region<hdr.nregions; region++) {
-                        if (*state & REGION_STATE_MASK)
-                            printf("filtering tile=%d read=%d cycle=%d region=%d\n", hdr.tileArray[tile], read, cycle, region);
-                        state++;
+                    if (state != NULL) {
+                        for (region=0; region<hdr.nregions; region++) {
+                            if (*state & REGION_STATE_MASK)
+                                printf("filtering tile=%d read=%d cycle=%d region=%d\n", hdr.tileArray[tile], read, cycle, region);
+                            state++;
+                        }
                     }
                 }
     }

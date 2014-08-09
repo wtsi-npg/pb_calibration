@@ -108,7 +108,7 @@ char* getFilterData(int tile, int read, int cycle, int region)
     int itile, i, previousReadLength = 0, offset;
     size_t nelem = _hdr->ntiles;
     void *pitile = lfind(&tile, _hdr->tileArray, &nelem, sizeof(int), &keyComp);
-    if (!pitile) return 0;  	// if tile not found in filter
+    if (!pitile) return NULL;  	// if tile not found in filter
     itile = ((int*)pitile - _hdr->tileArray);
     for (i=0; i < read; i++) previousReadLength += _hdr->readLength[i];
 	offset = itile * _hdr->totalReadLength * _hdr->nregions + (previousReadLength + cycle) * _hdr->nregions + region;
