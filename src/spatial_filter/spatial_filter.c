@@ -77,6 +77,10 @@
 #include <io_lib/hash_table.h>
 
 #include <sam.h>
+/* BAM_FSUPPLIMENTARY is new to bwa mem and may not be defined in sam.h */
+#ifndef BAM_FSUPPLIMENTARY
+#define BAM_FSUPPLIMENTARY 2048
+#endif
 
 #include <smalloc.h>
 #include <aprintf.h>
@@ -1101,6 +1105,16 @@ RegionTable ***makeRegionTable(Settings *s, samfile_t *fp_bam, int *bam_ntiles, 
 			break;	/* break on end of BAM file */
 		}
 
+		if (BAM_FUNMAP & bam->core.flag) continue;
+		if (BAM_FQCFAIL & bam->core.flag) continue;
+		if (BAM_FSECONDARY & bam->core.flag) continue;
+		if (BAM_FSUPPLIMENTARY & bam->core.flag) continue;
+		if (BAM_FPAIRED & bam->core.flag) {
+			if (0 == (BAM_FPROPER_PAIR & bam->core.flag)) {
+				continue;
+			}
+		}
+        
         read_length = bam->core.l_qseq;
         if (0 == s->read_length[bam_read]) {
             s->read_length[bam_read] = read_length;
@@ -1124,14 +1138,6 @@ RegionTable ***makeRegionTable(Settings *s, samfile_t *fp_bam, int *bam_ntiles, 
             exit(EXIT_FAILURE);
         }
 
-		if (BAM_FUNMAP & bam->core.flag) continue;
-		if (BAM_FQCFAIL & bam->core.flag) continue;
-		if (BAM_FPAIRED & bam->core.flag) {
-			if (0 == (BAM_FPROPER_PAIR & bam->core.flag)) {
-				continue;
-			}
-		}
-        
 		parse_bam_alignments(fp_bam, bam, bam_read_seq, bam_read_qual, NULL, bam_read_mismatch,
                                                   bam_read_buff_size, s->snp_hash);
 
@@ -1187,12 +1193,7 @@ RegionTable ***makeRegionTable(Settings *s, samfile_t *fp_bam, int *bam_ntiles, 
 }
 
 /*
- * Takes a bam file as input and outputs a re-calibrated bam file
- * It uses the associated CIF files too to do this.
- *
- * Assumption: within a single input file, all reads are the same length and
- * we're using unclipped data. We then utilise this to construct a common
- * header to reduce overhead of data.
+ * Takes a bam file as input and outputs a filtered bam file
  *
  * Returns: 0 written for success
  *	   -1 for failure
@@ -1209,18 +1210,10 @@ int filter_bam(Settings * s, samfile_t * fp_in_bam, samfile_t * fp_out_bam,
 
 	/* loop over reads in the input bam file */
 	while (1) {
-		int bam_lane = -1, bam_tile = -1, bam_read = -1, read_length, bam_x=-1, bam_y=-1;
+		int bam_lane = -1, bam_tile = -1, bam_read = -1, bam_x = -1, bam_y = -1;
 
 		if (parse_bam_readinfo(fp_in_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, NULL)) {
 			break;	/* break on end of BAM file */
-		}
-
-		read_length = bam->core.l_qseq;
-
-		if (s->read_length[bam_read] != read_length) {
-			die("Error: inconsistent read lengths within bam file for read %d.\n"
-			    "have length %ld, previously it was %d.\n",
-			    bam_read, (long)read_length, s->read_length[bam_read]);
 		}
 
 		if (lane == -1) {
