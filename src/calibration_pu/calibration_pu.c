@@ -1365,18 +1365,7 @@ SurvTable **makeSurvTable(Settings *s, samfile_t *fp_bam, int *bam_ntiles, size_
             break;	/* break on end of BAM file */
 		}
 
-        if (BAM_FUNMAP & bam->core.flag) continue;
-        if (BAM_FQCFAIL & bam->core.flag) continue;
-        if (BAM_FPAIRED & bam->core.flag) {
-            if (0 == (BAM_FPROPER_PAIR & bam->core.flag)) {
-                continue;
-            }
-        }
-
-        parse_bam_alignments(fp_bam, bam, bam_read_seq, bam_read_qual, bam_read_ref,
-                                     bam_read_mismatch, bam_read_buff_size,s->snp_hash);
-
-        read_length = strlen(bam_read_seq);
+        read_length = bam->core.l_qseq;
         if (0 == s->read_length[bam_read]) {
             s->read_length[bam_read] = read_length;
         }
@@ -1394,13 +1383,21 @@ SurvTable **makeSurvTable(Settings *s, samfile_t *fp_bam, int *bam_ntiles, size_
             lane = bam_lane;
         }
         if (bam_lane != lane){
-            fprintf(stderr,
-                    "Error: Inconsistent lane "
-                    "within bam file.\n"
-                    "have %d, previously it was %d.\n",
-                    bam_lane, lane);
+            fprintf(stderr,"Error: Inconsistent lane.\n");
+            fprintf(stderr,"Bam lane %d qseq lane %d.\n",bam_lane, lane);
             exit(EXIT_FAILURE);
         }
+
+        if (BAM_FUNMAP & bam->core.flag) continue;
+        if (BAM_FQCFAIL & bam->core.flag) continue;
+        if (BAM_FPAIRED & bam->core.flag) {
+            if (0 == (BAM_FPROPER_PAIR & bam->core.flag)) {
+                continue;
+            }
+        }
+
+        parse_bam_alignments(fp_bam, bam, bam_read_seq, bam_read_qual, bam_read_ref,
+                                     bam_read_mismatch, bam_read_buff_size,s->snp_hash);
 
         if( bam_tile != tile ){
    	        size_t nelem = ntiles;

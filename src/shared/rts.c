@@ -42,8 +42,10 @@ void readHeader(FILE *fp, Header *hdr)
     fgets(line, len, fp); hdr->nregions_x = atoi(line);
     fgets(line, len, fp); hdr->nregions_y = atoi(line);
     fgets(line, len, fp); hdr->nreads = atoi(line);
+    hdr->totalReadLength = 0;
     for (i=0; i < hdr->nreads; i++) {
         fgets(line, len, fp); hdr->readLength[i] = atoi(line);
+        hdr->totalReadLength += hdr->readLength[i];
     }
     fgets(line, len, fp); chomp(line); hdr->cmdLine = strdup(line);
     fgets(line, len, fp); hdr->ncomments = atoi(line);
@@ -101,17 +103,16 @@ static int keyComp(const void *k1, const void *k2)
 	return key != mem;
 }
 
-char getFilterData(int tile, int read, int cycle, int region)
+char* getFilterData(int tile, int read, int cycle, int region)
 {
-	int itile, i, cycleLength=0, totalCycleLength=0;
-	void *pitile;
-	for (i=0; i < read; i++) cycleLength += _hdr->readLength[i];
-	for (i=0; i < _hdr->nreads; i++) totalCycleLength += _hdr->readLength[i];
-	size_t nelem = _hdr->ntiles;
-	pitile = lfind(&tile, _hdr->tileArray, &nelem, sizeof(int), &keyComp);
-	if (!pitile) return 0;	// if tile not found in filter
-	itile = ((int*)pitile - _hdr->tileArray);
-	return filterData[ (itile * totalCycleLength * _hdr->nregions) + ((cycleLength + cycle) * _hdr->nregions) + region];
+    int itile, i, previousReadLength = 0, offset;
+    size_t nelem = _hdr->ntiles;
+    void *pitile = lfind(&tile, _hdr->tileArray, &nelem, sizeof(int), &keyComp);
+    if (!pitile) return NULL;  	// if tile not found in filter
+    itile = ((int*)pitile - _hdr->tileArray);
+    for (i=0; i < read; i++) previousReadLength += _hdr->readLength[i];
+	offset = itile * _hdr->totalReadLength * _hdr->nregions + (previousReadLength + cycle) * _hdr->nregions + region;
+	return filterData + offset;
 }
 
 // which region is x in?
