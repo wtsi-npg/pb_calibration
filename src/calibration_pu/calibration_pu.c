@@ -104,6 +104,10 @@
 #include <io_lib/hash_table.h>
 
 #include <sam.h>
+/* BAM_FSUPPLIMENTARY is new to bwa mem and may not be defined in sam.h */
+#ifndef BAM_FSUPPLIMENTARY
+#define BAM_FSUPPLIMENTARY 2048
+#endif
 
 #include <smalloc.h>
 #include <aprintf.h>
@@ -1363,7 +1367,17 @@ SurvTable **makeSurvTable(Settings *s, samfile_t *fp_bam, int *bam_ntiles, size_
 
         if (parse_bam_readinfo(fp_bam, bam, &bam_lane, &bam_tile, &bam_x, &bam_y, &bam_read, (NULL == s->intensity_dir ? NULL : &bam_offset))) {
             break;	/* break on end of BAM file */
-		}
+	}
+
+        if (BAM_FUNMAP & bam->core.flag) continue;
+        if (BAM_FQCFAIL & bam->core.flag) continue;
+        if (BAM_FSECONDARY & bam->core.flag) continue;
+        if (BAM_FSUPPLIMENTARY & bam->core.flag) continue;
+        if (BAM_FPAIRED & bam->core.flag) {
+            if (0 == (BAM_FPROPER_PAIR & bam->core.flag)) {
+                continue;
+            }
+        }
 
         read_length = bam->core.l_qseq;
         if (0 == s->read_length[bam_read]) {
@@ -1386,14 +1400,6 @@ SurvTable **makeSurvTable(Settings *s, samfile_t *fp_bam, int *bam_ntiles, size_
             fprintf(stderr,"Error: Inconsistent lane.\n");
             fprintf(stderr,"Bam lane %d qseq lane %d.\n",bam_lane, lane);
             exit(EXIT_FAILURE);
-        }
-
-        if (BAM_FUNMAP & bam->core.flag) continue;
-        if (BAM_FQCFAIL & bam->core.flag) continue;
-        if (BAM_FPAIRED & bam->core.flag) {
-            if (0 == (BAM_FPROPER_PAIR & bam->core.flag)) {
-                continue;
-            }
         }
 
         parse_bam_alignments(fp_bam, bam, bam_read_seq, bam_read_qual, bam_read_ref,
