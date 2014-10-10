@@ -182,8 +182,11 @@ parse_bam_alignments(
 				if (read_ref) read_ref[j] = 'S';
 			}
             break;
+        case BAM_CREF_SKIP:
+            // CIGAR: skip on the reference (e.g. spliced alignment)
+            break;
         default:
-            die("ERROR: Unexpected CIGAR operation: %c\n", op);
+            die("ERROR: Unexpected CIGAR operation: %d\n", op);
         }
     }
     if (j != bam->core.l_qseq) {
