@@ -126,6 +126,14 @@
 #define ST_MODE_PURITY  (1<<0)
 #define ST_MODE_QUALITY (1<<1)
 
+#define LEN_SUBST       2
+#define NUM_SUBST       16    // 4 ^ LEN_SUBST
+#define LEN_CNTXT       7
+#define NUM_CNTXT       16384 // 4 ^ LEN_CNTXT
+
+#define ST_HILO_PURITY   0.63
+#define ST_HILO_QUALITY  29.5
+
 #define ST_STATUS_GOOD  (1<<0)
 #define ST_STATUS_BAD   (1<<1)
 
@@ -138,18 +146,15 @@ typedef struct {
     float       offset;
     float       delta;
     float       scale;
+    float       predictor_hilo;
     float       *predictor;
     long        *num_bases;
     long        *num_errors;
     long        *subst[NUM_SUBST];
-    long        *cntxt[NUM_CNTXT];
-    long        *homop[NUM_CNTXT];
     long        substH[NUM_SUBST];
     long        substL[NUM_SUBST];
     long        cntxtH[NUM_CNTXT];
     long        cntxtL[NUM_CNTXT];
-    long        homopH[NUM_CNTXT];
-    long        homopL[NUM_CNTXT];
     long        total_bases;
     long        total_errors;
     float       quality;
@@ -201,20 +206,24 @@ static void initialiseSurvTable(Settings *s, SurvTable *st, int tile, int read, 
         st->offset = 0.25;
         st->delta  = 0.01;
         st->scale  = 1.0 / st->delta;
+
+        st->predictor_hilo = ST_HILO_PURITY;
     } else {
         st->nbins = 51;
 
         st->offset = 0.0;
         st->delta  = 1.0;
         st->scale  = 1.0 / st->delta;
+
+        st->predictor_hilo = ST_HILO_QUALITY;
     }
 
-    st->predictor = smalloc(st->nbins * sizeof(float));
+    st->predictor = (float *)smalloc(st->nbins * sizeof(float));
     for (i=0;i<st->nbins;i++)
         st->predictor[i] = st->offset + i * st->delta;
 
-    st->num_bases  = smalloc(st->nbins * sizeof(long));
-    st->num_errors = smalloc(st->nbins * sizeof(long));
+    st->num_bases  = (long *)smalloc(st->nbins * sizeof(long));
+    st->num_errors = (long *)smalloc(st->nbins * sizeof(long));
     for (i=0;i<st->nbins;i++) {
         st->num_bases[i] = 0;
         st->num_errors[i] = 0;
@@ -228,16 +237,8 @@ static void initialiseSurvTable(Settings *s, SurvTable *st, int tile, int read, 
         st->substL[j]=0;
     }
     for (j=0;j<NUM_CNTXT;j++) {
-        st->cntxt[j] = (long *)smalloc(st->nbins * sizeof(long));
-        for (i=0;i<st->nbins;i++)
-            st->cntxt[j][i] = 0;
         st->cntxtH[j]=0;
-	st->cntxtL[j]=0;
-        st->homop[j] = (long *)smalloc(st->nbins * sizeof(long));
-        for (i=0;i<st->nbins;i++)
-            st->homop[j][i] = 0;
-        st->homopH[j]=0;
-	st->homopL[j]=0;
+   	    st->cntxtL[j]=0;
     }
 
     st->total_bases = 0;
@@ -263,10 +264,6 @@ static void freeSurvTable(Settings *s, int ntiles, SurvTable **sts, int no_cycle
                     free(st->num_errors);
                     for (i=0;i<NUM_SUBST;i++)
                         free(st->subst[i]);
-                    for (i=0;i<NUM_CNTXT;i++)
-                        free(st->cntxt[i]);
-                    for (i=0;i<NUM_CNTXT;i++)
-                        free(st->homop[i]);
                     st->nbins = 0;
                 }
             }
@@ -367,31 +364,6 @@ static void completeSurvTable(Settings *s, SurvTable **sts, int no_cycles)
             }
 
             st->quality = -10.0 * log10((quality_errors + ssc)/(quality_bases + ssc));
-
-            int ipopt = optimalPredictorBin(st, st->nbins);
-            float optimal_predictor = st->predictor[ipopt];
-            int j;
-            for(i=0;i<st->nbins;i++)
-            {
-                if (st->predictor[i] > optimal_predictor)
-                {
-                    for(j=0;j<NUM_SUBST;j++)
-                        st->substH[j] += st->subst[j][i];
-                    for(j=0;j<NUM_CNTXT;j++)
-                        st->cntxtH[j] += st->cntxt[j][i];
-                    for(j=0;j<NUM_CNTXT;j++)
-                        st->homopH[j] += st->homop[j][i];
-                }
-                else
-                {
-                    for(j=0;j<NUM_SUBST;j++)
-                        st->substL[j] += st->subst[j][i];
-                    for(j=0;j<NUM_CNTXT;j++)
-                        st->cntxtL[j] += st->cntxt[j][i];
-                    for(j=0;j<NUM_CNTXT;j++)
-                        st->homopL[j] += st->homop[j][i];
-                }
-            }
         }
     }
 }
@@ -493,7 +465,7 @@ static SurvTable **makeGlobalSurvTable(Settings *s, int ntiles, SurvTable **sts)
     {
         read_length = s->read_length[read];
         if (0 == read_length) continue;
-        sts[ntiles*N_READS+read] = smalloc(read_length * sizeof(SurvTable));
+        sts[ntiles*N_READS+read] = (SurvTable *)smalloc(read_length * sizeof(SurvTable));
 
         for(cycle=0;cycle<read_length;cycle++)
         {
@@ -512,14 +484,18 @@ static SurvTable **makeGlobalSurvTable(Settings *s, int ntiles, SurvTable **sts)
                         st->num_errors[i] += tile_st->num_errors[i];
                     }
                     for(j=0;j<NUM_SUBST;j++)
+                    {
                         for(i=0;i<st->nbins;i++)
                             st->subst[j][i] += tile_st->subst[j][i];
+                        st->substH[j] += tile_st->substH[j];
+                        st->substL[j] += tile_st->substL[j];
+                    }
+                    
                     for(j=0;j<NUM_CNTXT;j++)
-                        for(i=0;i<st->nbins;i++)
-                            st->cntxt[j][i] += tile_st->cntxt[j][i];
-                    for(j=0;j<NUM_CNTXT;j++)
-                        for(i=0;i<st->nbins;i++)
-                            st->homop[j][i] += tile_st->homop[j][i];
+                    {
+                        st->cntxtH[j] += tile_st->cntxtH[j];
+                        st->cntxtL[j] += tile_st->cntxtL[j];
+                    }
                     tile_st->total_bases = 0;
                     tile_st->total_errors = 0;
                 }
@@ -535,38 +511,28 @@ static SurvTable **makeGlobalSurvTable(Settings *s, int ntiles, SurvTable **sts)
 static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
 {
     FILE *fp = NULL;
-    SurvTable **error_sts;
+    SurvTable **read_sts;
     int read, cycle, i, j;
     char p;
 
     // open error file
     for(read=0;read<N_READS;read++)
     {
-        if( NULL == sts[ntiles*N_READS+read]) continue;
-        for(cycle=0;cycle<s->read_length[read];cycle++)
+        SurvTable *st = sts[ntiles*N_READS+read];
+        int filename_sz;
+        char *filename;
+        if( NULL == sts[ntiles*N_READS+read] ) continue;
+        filename_sz = (NULL == s->prefix ? 0 : strlen(s->prefix)) + 100;
+        filename = smalloc(filename_sz);
+        sprintf(filename, "%s_%s_error.txt", s->prefix, (st->mode == ST_MODE_PURITY ? "purity" : "quality"));
+        fp = fopen(filename, "w");
+        if( NULL == fp )
         {
-            SurvTable *st = sts[ntiles*N_READS+read] + cycle;
-
-            // skip st with no data
-            if( 0 == st->total_bases ) continue;
-
-            if( NULL == fp )
-            {
-                int filename_sz;
-                char *filename;
-                filename_sz = (NULL == s->prefix ? 0 : strlen(s->prefix)) + 100;
-                filename = smalloc(filename_sz);
-                sprintf(filename, "%s_%s_error.txt", s->prefix, (st->mode == ST_MODE_PURITY ? "purity" : "quality"));
-                fp = fopen(filename, "w");
-                if( NULL == fp )
-                {
-                    fprintf(stderr, "ERROR: can't open Error file %s: %s\n",
-                            filename, strerror(errno));
-                    exit(EXIT_FAILURE);
-                }
-                free(filename);
-            }
+            fprintf(stderr, "ERROR: can't open Error file %s: %s\n", filename, strerror(errno));
+            exit(EXIT_FAILURE);
         }
+        free(filename);
+        break;
     }
     if( NULL == fp )
     {
@@ -574,47 +540,46 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
         exit(EXIT_FAILURE);
     }
 
-    error_sts = smalloc(N_READS * sizeof(SurvTable *));
+    /* generate read summary tables by summing over cycles */
+
+    read_sts = (SurvTable **)smalloc(N_READS * sizeof(SurvTable *));
     for(read=0;read<N_READS;read++)
-        error_sts[read] = NULL;
+        read_sts[read] = NULL;
 
     for(read=0;read<N_READS;read++)
     {
         int read_length = s->read_length[read];
         if (0 == read_length) continue;
 
-        error_sts[read] = smalloc(sizeof(SurvTable));
-        SurvTable *error_st = error_sts[read];
+        read_sts[read] = (SurvTable *)smalloc(sizeof(SurvTable));
+        SurvTable *read_st = read_sts[read];
 
-        initialiseSurvTable(s, error_st, -1, read, -1);
+        initialiseSurvTable(s, read_st, -1, read, -1);
 
         for(cycle=0;cycle<read_length;cycle++)
         {
             SurvTable *st = sts[ntiles*N_READS+read] + cycle;
-            for(i=0;i<error_st->nbins;i++)
-            {
-                error_st->num_bases[i] += st->num_bases[i];
-                error_st->num_errors[i] += st->num_errors[i];
-            }
             for(j=0;j<NUM_SUBST;j++)
                 for(i=0;i<st->nbins;i++)
-                    error_st->subst[j][i] += st->subst[j][i];
+                    read_st->subst[j][i] += st->subst[j][i];
+            for(j=0;j<NUM_SUBST;j++)
+                read_st->substH[j] += st->substH[j];
+            for(j=0;j<NUM_SUBST;j++)
+                read_st->substL[j] += st->substL[j];
             for(j=0;j<NUM_CNTXT;j++)
-                for(i=0;i<st->nbins;i++)
-                    error_st->cntxt[j][i] += st->cntxt[j][i];
+                read_st->cntxtH[j] += st->cntxtH[j];
             for(j=0;j<NUM_CNTXT;j++)
-                for(i=0;i<st->nbins;i++)
-                    error_st->homop[j][i] += st->homop[j][i];
+                read_st->cntxtL[j] += st->cntxtL[j];
         }
     }
 
-    completeSurvTable(s, error_sts, 1);
-    
+    /* substitution RC */
+
     fprintf(fp, "# Substitution error table. Use `grep ^SET | cut -f 2-` to extract this part\n");
     fprintf(fp, "# One row per predictor, columns read, predictor followed by substitution and count for 12 substitutions\n");
     for(read=0;read<N_READS;read++)
     {
-        SurvTable *st = error_sts[read];
+        SurvTable *st = read_sts[read];
         if( NULL == st) continue;
 
         for(i=0;i<st->nbins;i++)
@@ -631,16 +596,17 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
         }
     }
     
-    fprintf(fp, "# Mismatch substitutions high predictor. Use `grep ^MSH | cut -f 2-` to extract this part\n");
+    fprintf(fp, "# Mismatch substitutions high predictor. Use `grep ^RCH | cut -f 2-` to extract this part\n");
     fprintf(fp, "# One row per read and cycle, columns read, cycle then substitution and count for 12 substitutions\n");
     for(read=0;read<N_READS;read++)
     {
         if( NULL == sts[ntiles*N_READS+read]) continue;
+        /* cycle by cycle */
         for(cycle=0;cycle<s->read_length[read];cycle++)
         {
             SurvTable *st = sts[ntiles*N_READS+read] + cycle;
             if( 0 == st->total_bases ) continue;
-            fprintf(fp, "MSH\t%d\t%d", read, cycle);
+            fprintf(fp, "RCH\t%d\t%d", read, cycle);
             for (j=0;j<NUM_SUBST;j++)
             {
                 char *subst;
@@ -650,37 +616,9 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
             }
             fprintf(fp, "\n");
         }
-    }
-
-    fprintf(fp, "# Mismatch substitutions low predictor. Use `grep ^MSL | cut -f 2-` to extract this part\n");
-    fprintf(fp, "# One row per read and cycle, columns read, cycle then substitution and count for 12 substitutions\n");
-    for(read=0;read<N_READS;read++)
-    {
-        if( NULL == sts[ntiles*N_READS+read]) continue;
-        for(cycle=0;cycle<s->read_length[read];cycle++)
-        {
-            SurvTable *st = sts[ntiles*N_READS+read] + cycle;
-            if( 0 == st->total_bases ) continue;
-            fprintf(fp, "MSL\t%d\t%d", read, cycle);
-            for (j=0;j<NUM_SUBST;j++)
-            {
-                char *subst;
-                subst=word2str(j,LEN_SUBST);
-                if (subst[0]==subst[1]) continue;
-                fprintf(fp, "\t%s\t%ld", subst, st->substL[j]);
-            }
-            fprintf(fp, "\n");
-        }
-    }
-
-    fprintf(fp, "# Substitution profile high predictor. Use `grep ^PRH | cut -f 2-` to extract this part\n");
-    fprintf(fp, "# One row per read, columns read then substitution and count for 12 substitutions\n");
-    for(read=0;read<N_READS;read++)
-    {
-        SurvTable *st = error_sts[read];
-        if( NULL == st) continue;
-
-        fprintf(fp, "PRH\t%d", read);
+        /* and read summary (cycle = -1) */
+        SurvTable *st = read_sts[read];
+        fprintf(fp, "RCH\t%d\t%d", read, -1);
         for (j=0;j<NUM_SUBST;j++)
         {
             char *subst;
@@ -690,15 +628,30 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
         }
         fprintf(fp, "\n");
     }
-    
-    fprintf(fp, "# Substitution profile low predictor. Use `grep ^PRL | cut -f 2-` to extract this part\n");
-    fprintf(fp, "# One row per read, columns read then substitution and count for 12 substitutions\n");
+
+    fprintf(fp, "# Mismatch substitutions low predictor. Use `grep ^RCL | cut -f 2-` to extract this part\n");
+    fprintf(fp, "# One row per read and cycle, columns read, cycle then substitution and count for 12 substitutions\n");
     for(read=0;read<N_READS;read++)
     {
-        SurvTable *st = error_sts[read];
-        if( NULL == st) continue;
-
-        fprintf(fp, "PRL\t%d", read);
+        if( NULL == sts[ntiles*N_READS+read]) continue;
+        /* cycle by cycle */
+        for(cycle=0;cycle<s->read_length[read];cycle++)
+        {
+            SurvTable *st = sts[ntiles*N_READS+read] + cycle;
+            if( 0 == st->total_bases ) continue;
+            fprintf(fp, "RCL\t%d\t%d", read, cycle);
+            for (j=0;j<NUM_SUBST;j++)
+            {
+                char *subst;
+                subst=word2str(j,LEN_SUBST);
+                if (subst[0]==subst[1]) continue;
+                fprintf(fp, "\t%s\t%ld", subst, st->substL[j]);
+            }
+            fprintf(fp, "\n");
+        }
+        /* and read summary (cycle = -1) */
+        SurvTable *st = read_sts[read];
+        fprintf(fp, "RCL\t%d\t%d", read, -1);
         for (j=0;j<NUM_SUBST;j++)
         {
             char *subst;
@@ -709,105 +662,311 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
         fprintf(fp, "\n");
     }
     
-    fprintf(fp, "# Effect of previous base high predictor. Use `grep ^P1H | cut -f 2-` to extract this part\n");
+    /* previous base PRC */
+
+    fprintf(fp, "# Effect of previous base high predictor. Use `grep ^PRCH | cut -f 2-` to extract this part\n");
     fprintf(fp, "# One row per read and previous base, columns read then previous base+substitution and count for 12 substitutions\n");
     for(read=0;read<N_READS;read++)
     {
-        SurvTable *st = error_sts[read];
+        /* read summary */
+        SurvTable *st = read_sts[read];
         if( NULL == st) continue;
-
-        for (j=0,p='\0';j<NUM_CNTXT;j++)
+        int cntxt_off = 3;
+        int len_cntxt = 3;
+        int num_cntxt = 64;
+        long *count = (long *)smalloc(num_cntxt * sizeof(long));
+        for (j=0;j<num_cntxt;j++)
+            count[j]=0;
+        for (j=0;j<NUM_CNTXT;j++)
         {
             char *cntxt;
+            int word;
             cntxt=word2str(j,LEN_CNTXT);
+            cntxt+=cntxt_off;
+            word=str2word(cntxt,len_cntxt);
+            count[word] += st->cntxtH[j];
+        }
+        for (j=0,p=0;j<num_cntxt;j++)
+        {
+            char *cntxt;
+            cntxt=word2str(j,len_cntxt);
             if (p != cntxt[0]) {
                 p = cntxt[0];
                 if (j) fprintf(fp, "\n");
-                fprintf(fp, "P1H\t%d", read);
+                fprintf(fp, "PRCH\t%d", read);
             }
             if (cntxt[1]==cntxt[2]) continue;
+            fprintf(fp, "\t%s\t%ld", cntxt, count[j]);
+        }
+        fprintf(fp, "\n");
+        free(count);
+    }
+    
+    fprintf(fp, "# Effect of previous base low predictor. Use `grep ^PRCL | cut -f 2-` to extract this part\n");
+    fprintf(fp, "# One row per read and previous base, columns read then previous base+substitution and count for 12 substitutions\n");
+    for(read=0;read<N_READS;read++)
+    {
+        /* read summary */
+        SurvTable *st = read_sts[read];
+        if( NULL == st) continue;
+        int cntxt_off = 3;
+        int len_cntxt = 3;
+        int num_cntxt = 64;
+        long *count = (long *)smalloc(num_cntxt * sizeof(long));
+        for (j=0;j<num_cntxt;j++)
+            count[j]=0;
+        for (j=0;j<NUM_CNTXT;j++)
+        {
+            char *cntxt;
+            int word;
+            cntxt=word2str(j,LEN_CNTXT);
+            cntxt+=cntxt_off;
+            word=str2word(cntxt,len_cntxt);
+            count[word] += st->cntxtL[j];
+        }
+        for (j=0,p=0;j<num_cntxt;j++)
+        {
+            char *cntxt;
+            cntxt=word2str(j,len_cntxt);
+            if (p != cntxt[0]) {
+                p = cntxt[0];
+                if (j) fprintf(fp, "\n");
+                fprintf(fp, "PRCL\t%d", read);
+            }
+            if (cntxt[1]==cntxt[2]) continue;
+            fprintf(fp, "\t%s\t%ld", cntxt, count[j]);
+        }
+        fprintf(fp, "\n");
+        free(count);
+    }
+    
+    /* previous base + next base PRCN */
+
+    fprintf(fp, "# Effect of previous base and next base high predictor. Use `grep ^PRCNH | cut -f 2-` to extract this part\n");
+    fprintf(fp, "# One row per read and previous/next base, columns read then previous base+substitution+next base and count for 12 substitutions\n");
+    for(read=0;read<N_READS;read++)
+    {
+        /* read summary */
+        SurvTable *st = read_sts[read];
+        if( NULL == st) continue;
+        int cntxt_off = 3;
+        int len_cntxt = 4;
+        int num_cntxt = 256;
+        long *count = (long *)smalloc(num_cntxt * sizeof(long));
+        for (j=0;j<num_cntxt;j++)
+            count[j]=0;
+        for (j=0;j<NUM_CNTXT;j++)
+        {
+            char *cntxt;
+            int word;
+            cntxt=word2str(j,LEN_CNTXT);
+            cntxt+=cntxt_off;
+            word=str2word(cntxt,len_cntxt);
+            count[word] += st->cntxtH[j];
+        }
+        for (j=0,p=0;j<num_cntxt;j++)
+        {
+            char *cntxt;
+            cntxt=word2str(j,len_cntxt);
+            if (p != cntxt[1]) {
+                p = cntxt[1];
+                if (j) fprintf(fp, "\n");
+                fprintf(fp, "PRCNH\t%d", read);
+            }
+            if (cntxt[1]==cntxt[2]) continue;
+            fprintf(fp, "\t%s\t%ld", cntxt, count[j]);
+        }
+        fprintf(fp, "\n");
+        free(count);
+    }
+    
+    fprintf(fp, "# Effect of previous base and next base low predictor. Use `grep ^PRCNL | cut -f 2-` to extract this part\n");
+    fprintf(fp, "# One row per read and previous/next base, columns read then previous base+substitution+next base and count for 12 substitutions\n");
+    for(read=0;read<N_READS;read++)
+    {
+        /* read summary */
+        SurvTable *st = read_sts[read];
+        if( NULL == st ) continue;
+        int cntxt_off = 3;
+        int len_cntxt = 4;
+        int num_cntxt = 256;
+        long *count = (long *)smalloc(num_cntxt * sizeof(long));
+        for (j=0;j<num_cntxt;j++)
+            count[j]=0;
+        for (j=0;j<NUM_CNTXT;j++)
+        {
+            char *cntxt;
+            int word;
+            cntxt=word2str(j,LEN_CNTXT);
+            cntxt+=cntxt_off;
+            word=str2word(cntxt,len_cntxt);
+            count[word] += st->cntxtL[j];
+        }
+        for (j=0,p=0;j<num_cntxt;j++)
+        {
+            char *cntxt;
+            cntxt=word2str(j,len_cntxt);
+            if (p != cntxt[1]) {
+                p = cntxt[1];
+                if (j) fprintf(fp, "\n");
+                fprintf(fp, "PRCNL\t%d", read);
+            }
+            if (cntxt[1]==cntxt[2]) continue;
+            fprintf(fp, "\t%s\t%ld", cntxt, count[j]);
+        }
+        fprintf(fp, "\n");
+        free(count);
+    }
+    
+    /* previous 4 base homopolymer HRC. */
+
+    fprintf(fp, "# Homopolymer effect high predictor. Use `grep ^HRCH | cut -f 2-` to extract this part\n");
+    fprintf(fp, "# One row per read and homopolymer, columns read then homopolymer+substitution and count for 12 substitutions\n");
+    for(read=0;read<N_READS;read++)
+    {
+        if( NULL == sts[ntiles*N_READS+read]) continue;
+        /* read by read */
+        SurvTable *st = read_sts[read];
+        int len_homop = 4;
+        int cntxt_off = 3;
+        int len_cntxt = 3;
+        int num_cntxt = 64;
+        long *count = (long *)smalloc(num_cntxt * sizeof(long));
+        for (j=0;j<num_cntxt;j++)
+            count[j]=0;
+        for (j=0;j<NUM_CNTXT;j++)
+        {
+            int k;
+            char *cntxt;
+            int word;
+            cntxt=word2str(j,LEN_CNTXT);
+            for (k=0;k<len_homop;k++)
+                if (cntxt[k] != cntxt[cntxt_off]) break;
+            if (k != len_homop) continue;
+            cntxt+=cntxt_off;
+            word=str2word(cntxt,len_cntxt);
+            count[word] += st->cntxtH[j];
+        }
+        for (j=0,p=0;j<num_cntxt;j++)
+        {
+            int k;
+            char homop[len_homop];
+            char *cntxt;
+            cntxt=word2str(j,len_cntxt);
+            if (p != cntxt[0]) {
+                p = cntxt[0];
+                if (j) fprintf(fp, "\n");
+                fprintf(fp, "HRCH\t%d", read);
+            }
+            if (cntxt[1]==cntxt[2]) continue;
+            for (k=0;k<(len_homop-1);k++)
+                homop[k]=cntxt[0];
+            homop[k]=0;
+            fprintf(fp, "\t%s%s\t%ld", homop, cntxt, count[j]);
+        }
+        fprintf(fp, "\n");
+        free(count);
+    }
+    
+    fprintf(fp, "# Homopolymer effect low predictor. Use `grep ^HRCL | cut -f 2-` to extract this part\n");
+    fprintf(fp, "# One row per read and homopolymer, columns read then homopolymer+substitution and count for 12 substitutions\n");
+    for(read=0;read<N_READS;read++)
+    {
+        if( NULL == sts[ntiles*N_READS+read]) continue;
+        /* read by read */
+        SurvTable *st = read_sts[read];
+        int len_homop = 4;
+        int cntxt_off = 3;
+        int len_cntxt = 3;
+        int num_cntxt = 64;
+        long *count = (long *)smalloc(num_cntxt * sizeof(long));
+        for (j=0;j<num_cntxt;j++)
+            count[j]=0;
+        for (j=0;j<NUM_CNTXT;j++)
+        {
+            int k;
+            char *cntxt;
+            int word;
+            cntxt=word2str(j,LEN_CNTXT);
+            for (k=0;k<len_homop;k++)
+                if (cntxt[k] != cntxt[cntxt_off]) break;
+            if (k != len_homop) continue;
+            cntxt+=cntxt_off;
+            word=str2word(cntxt,len_cntxt);
+            count[word] += st->cntxtL[j];
+        }
+        for (j=0,p=0;j<num_cntxt;j++)
+        {
+            int k;
+            char homop[len_homop];
+            char *cntxt;
+            cntxt=word2str(j,len_cntxt);
+            if (p != cntxt[0]) {
+                p = cntxt[0];
+                if (j) fprintf(fp, "\n");
+                fprintf(fp, "HRCL\t%d", read);
+            }
+            if (cntxt[1]==cntxt[2]) continue;
+            for (k=0;k<(len_homop-1);k++)
+                homop[k]=cntxt[0];
+            homop[k]=0;
+            fprintf(fp, "\t%s%s\t%ld", homop, cntxt, count[j]);
+        }
+        fprintf(fp, "\n");
+        free(count);
+    }
+    
+    /* previous 4 bases + next base PPPPRCN - only the 10 most common */
+
+    fprintf(fp, "# Effect of previous 4 bases and next base high predictor. Use `grep ^PPPPRCNH | cut -f 2-` to extract this part\n");
+    fprintf(fp, "# One row per read and previous/next base, columns read then previous base+substitution+next base and count for 12 substitutions\n");
+    for(read=0;read<N_READS;read++)
+    {
+        /* read summary */
+        SurvTable *st = read_sts[read];
+        if( NULL == st ) continue;
+	    long *count = (long *)smalloc(NUM_CNTXT * sizeof(long));
+        for (j=0;j<NUM_CNTXT;j++)
+	        count[j] = st->cntxtH[j];
+        qsort(count, NUM_CNTXT, sizeof(long), long_sort);
+        int threshold = (count[NUM_CNTXT-10] > 0 ? count[NUM_CNTXT-10] : 1);
+        fprintf(fp, "PPPPRCNH\t%d", read);
+        for (j=0;j<NUM_CNTXT;j++)
+        {
+            char *cntxt;
+            cntxt=word2str(j,LEN_CNTXT);
+            if (st->cntxtH[j] < threshold) continue;
             fprintf(fp, "\t%s\t%ld", cntxt, st->cntxtH[j]);
         }
         fprintf(fp, "\n");
+        free(count);
     }
-    
-    fprintf(fp, "# Effect of previous base low predictor. Use `grep ^P1L | cut -f 2-` to extract this part\n");
-    fprintf(fp, "# One row per read and previous base, columns read then previous base+substitution and count for 12 substitutions\n");
+
+    fprintf(fp, "# Effect of previous 4 bases and next base low predictor. Use `grep ^PPPPRCNL | cut -f 2-` to extract this part\n");
+    fprintf(fp, "# One row per read and previous/next base, columns read then previous base+substitution+next base and count for 12 substitutions\n");
     for(read=0;read<N_READS;read++)
     {
-        SurvTable *st = error_sts[read];
-        if( NULL == st) continue;
-
-        for (j=0, p='\0';j<NUM_CNTXT;j++)
+        /* read summary */
+        SurvTable *st = read_sts[read];
+        if( NULL == st ) continue;
+	    long *count = (long *)smalloc(NUM_CNTXT * sizeof(long));
+        for (j=0;j<NUM_CNTXT;j++)
+	        count[j] = st->cntxtL[j];
+        qsort(count, NUM_CNTXT, sizeof(long), long_sort);
+        int threshold = (count[NUM_CNTXT-12] > 0 ? count[NUM_CNTXT-12] : 1);
+        fprintf(fp, "PPPPRCNL\t%d", read);
+        for (j=0;j<NUM_CNTXT;j++)
         {
             char *cntxt;
             cntxt=word2str(j,LEN_CNTXT);
-            if (p != cntxt[0]) {
-                p = cntxt[0];
-                if (j) fprintf(fp, "\n");
-                fprintf(fp, "P1L\t%d", read);
-            }
-            if (cntxt[1]==cntxt[2]) continue;
+            if (st->cntxtL[j] < threshold) continue;
             fprintf(fp, "\t%s\t%ld", cntxt, st->cntxtL[j]);
         }
         fprintf(fp, "\n");
+        free(count);
     }
-    
-    fprintf(fp, "# Homopolymer effect high predictor. Use `grep ^HPH | cut -f 2-` to extract this part\n");
-    fprintf(fp, "# One row per read and homopolymer, columns read then homopolymer+substitution and count for 12 substitutions\n");
-    for(read=0;read<N_READS;read++)
-    {
-        SurvTable *st = error_sts[read];
-        if( NULL == st) continue;
 
-        for (j=0,p='\0';j<NUM_CNTXT;j++)
-        {
-            int k;
-            char homop[LEN_HOMOP];
-            char *cntxt;
-            cntxt=word2str(j,LEN_CNTXT);
-            if (p != cntxt[0]) {
-                p = cntxt[0];
-                if (j) fprintf(fp, "\n");
-                fprintf(fp, "HPH\t%d", read);
-            }
-            if (cntxt[1]==cntxt[2]) continue;
-            for (k=0;k<(LEN_HOMOP-1);k++)
-                homop[k]=cntxt[0];
-            homop[k]='\0';
-            fprintf(fp, "\t%s%s\t%ld", homop, cntxt, st->homopH[j]);
-        }
-        fprintf(fp, "\n");
-    }
-    
-    fprintf(fp, "# Homopolymer effect low predictor. Use `grep ^HPL | cut -f 2-` to extract this part\n");
-    fprintf(fp, "# One row per read and homopolymer, columns read then homopolymer+substitution and count for 12 substitutions\n");
-    for(read=0;read<N_READS;read++)
-    {
-        SurvTable *st = error_sts[read];
-        if( NULL == st) continue;
-
-        for (j=0,p='\0';j<NUM_CNTXT;j++)
-        {
-            int k;
-            char homop[LEN_HOMOP];
-            char *cntxt;
-            cntxt=word2str(j,LEN_CNTXT);
-            if (p != cntxt[0]) {
-                p = cntxt[0];
-                if (j) fprintf(fp, "\n");
-                fprintf(fp, "HPL\t%d", read);
-            }
-            if (cntxt[1]==cntxt[2]) continue;
-            for (k=0;k<(LEN_HOMOP-1);k++)
-                homop[k]=cntxt[0];
-            homop[k]='\0';
-            fprintf(fp, "\t%s%s\t%ld", homop, cntxt, st->homopL[j]);
-        }
-        fprintf(fp, "\n");
-    }
-    
-    freeSurvTable(s, 0, error_sts, 1);
+    freeSurvTable(s, 0, read_sts, 1);
     if( NULL != fp) fclose(fp);
 }
 
@@ -866,15 +1025,15 @@ static void initialiseCalTable(SurvTable *st, CalTable *ct)
 
     ct->nbins = st->nbins;
 
-    ct->predictor = smalloc(ct->nbins * sizeof(float));
+    ct->predictor = (float *)smalloc(ct->nbins * sizeof(float));
     for(i=0;i<ct->nbins;i++)
         ct->predictor[i] = st->predictor[i];
 
-    ct->num_bases  = smalloc(ct->nbins * sizeof(long));
-    ct->num_errors = smalloc(ct->nbins * sizeof(long));
-    ct->frac_bases = smalloc(ct->nbins * sizeof(float));
-    ct->error_rate = smalloc(ct->nbins * sizeof(float));
-    ct->quality    = smalloc(ct->nbins * sizeof(float));
+    ct->num_bases  = (long *)smalloc(ct->nbins * sizeof(long));
+    ct->num_errors = (long *)smalloc(ct->nbins * sizeof(long));
+    ct->frac_bases = (float *)smalloc(ct->nbins * sizeof(float));
+    ct->error_rate = (float *)smalloc(ct->nbins * sizeof(float));
+    ct->quality    = (float *)smalloc(ct->nbins * sizeof(float));
     for(i=0;i<ct->nbins;i++)
     {
         ct->num_bases[i]  = st->num_bases[i];
@@ -1049,7 +1208,7 @@ static CalTable **makeCalTable(Settings *s, int ntiles, SurvTable **sts)
     float ssc = 1.0;
     int itile, read, read_length, cycle, i;
 
-    cts = smalloc((ntiles+1) * N_READS * sizeof(CalTable *));
+    cts = (CalTable **)smalloc((ntiles+1) * N_READS * sizeof(CalTable *));
 
     for(itile=0;itile<=ntiles;itile++)
         for(read=0;read<N_READS;read++)
@@ -1058,7 +1217,7 @@ static CalTable **makeCalTable(Settings *s, int ntiles, SurvTable **sts)
             if( NULL == sts[itile*N_READS+read]) continue;
 
             read_length = s->read_length[read];
-            cts[itile*N_READS+read] = smalloc(read_length * sizeof(CalTable));
+            cts[itile*N_READS+read] = (CalTable *)smalloc(read_length * sizeof(CalTable));
             
             for(cycle=0;cycle<read_length;cycle++)
             {
@@ -1182,7 +1341,7 @@ static int updateSurvTable(Settings *s, SurvTable **sts, CifData *cif_data,
     char *chrom = fp->header->target_name[bam->core.tid];
     int pos = bam->core.pos;
 
-    fprintf(fp_caldata, "%d\t%d\t%d\t%s\t%d\t", x, y, dir, chrom, pos);
+    fprintf(fp_caldata, "%d\t%d\t%d\t%d\t%s\t%d\t", read, x, y, dir, chrom, pos);
 #endif
 
     /* update survival table */
@@ -1289,28 +1448,34 @@ static int updateSurvTable(Settings *s, SurvTable **sts, CifData *cif_data,
             if( read_mismatch[b] & BASE_MISMATCH ){
                 char subst[LEN_SUBST+1];
                 char cntxt[LEN_CNTXT+1];
-                int word;
+                int chr, word;
 
-                subst[0]=read_ref[b];
-                subst[1]=read_seq[b];
-                word=str2word(subst,LEN_SUBST);
-                if( word >= 0 )
+                chr=0;
+                subst[chr++]=read_ref[b];
+                subst[chr++]=read_seq[b];
+                word=str2word(subst, LEN_SUBST);
+                if( word >= 0 ) {
                     st->subst[word][ibin]++;
+                    if( predictor >= st->predictor_hilo )
+                        st->substH[word]++;
+                    else
+                        st->substL[word]++;
+                }
 
-                cntxt[0]=(b > 0 ? read_ref[b-1] : 'N');
-                cntxt[1]=read_ref[b];
-                cntxt[2]=read_seq[b];
-                word=str2word(cntxt,LEN_CNTXT);
-                if( word >= 0 ) 
-                    st->cntxt[word][ibin]++;
-
-                if( word >= 0 && b >= LEN_HOMOP ){
-                    int l;
-                    for(l=1; l<=LEN_HOMOP; l++)
-                        if( read_ref[b-l] != cntxt[0] )
-                            break;
-                    if( l > LEN_HOMOP)
-                        st->homop[word][ibin]++;
+                chr=0;
+                cntxt[chr++]=(b > 3 ? read_ref[b-4] : 'N');
+                cntxt[chr++]=(b > 2 ? read_ref[b-3] : 'N');
+                cntxt[chr++]=(b > 1 ? read_ref[b-2] : 'N');
+                cntxt[chr++]=(b > 0 ? read_ref[b-1] : 'N');
+                cntxt[chr++]=read_ref[b];
+                cntxt[chr++]=read_seq[b];
+                cntxt[chr++]=(b < (read_length-1) ? read_ref[b+1] : 'N');
+                word=str2word(cntxt, LEN_CNTXT);
+                if( word >= 0 ) {
+                    if( predictor >= st->predictor_hilo )
+                        st->cntxtH[word]++;
+                    else
+                        st->cntxtL[word]++;
                 }
             }
         }
@@ -1471,7 +1636,7 @@ SurvTable **makeSurvTable(Settings *s, samfile_t *fp_bam, int *bam_ntiles, size_
 
         if (NULL == sts[itile*N_READS+bam_read]) {
             int cycle;
-            sts[itile*N_READS+bam_read] = smalloc(read_length * sizeof(SurvTable));
+            sts[itile*N_READS+bam_read] = (SurvTable *)smalloc(read_length * sizeof(SurvTable));
             for(cycle=0;cycle<read_length;cycle++)
                 initialiseSurvTable(s, sts[itile*N_READS+bam_read]+cycle, tile, bam_read, cycle);
         }
