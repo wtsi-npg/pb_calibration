@@ -1,7 +1,7 @@
 dnl Process this file with autoconf to produce a configure script.
 AC_INIT(pb_cal, 8.0.0)
 AC_CONFIG_HEADERS(pb_config.h)
-AM_INIT_AUTOMAKE
+AM_INIT_AUTOMAKE([foreign])
 AM_MAINTAINER_MODE
 
 dnl Checks for programs.

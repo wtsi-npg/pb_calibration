@@ -169,6 +169,58 @@ typedef struct {
 	int compress;
 } Settings;
 
+char *append_int(char *cp, int i) {
+    int j;
+
+    if (i < 0) {
+	*cp++ = '-';
+	if (i == INT_MIN) {
+	    *cp++ = '2'; *cp++ = '1'; *cp++ = '4'; *cp++ = '7';
+	    *cp++ = '4'; *cp++ = '8'; *cp++ = '3'; *cp++ = '6';
+	    *cp++ = '4'; *cp++ = '8';
+	    return cp;
+	}
+
+	i = -i;
+    } else if (i == 0) {
+	*cp++ = '0';
+	return cp;
+    }
+
+    //if (i < 10)         goto b0;
+    if (i < 100)        goto b1;
+    //if (i < 1000)       goto b2;
+    if (i < 10000)      goto b3;
+    //if (i < 100000)     goto b4;
+    if (i < 1000000)    goto b5;
+    //if (i < 10000000)   goto b6;
+    if (i < 100000000)  goto b7;
+
+     if ((j = i / 1000000000)) {*cp++ = j + '0'; i -= j*1000000000; goto x8;}
+     if ((j = i / 100000000))  {*cp++ = j + '0'; i -= j*100000000;  goto x7;}
+ b7: if ((j = i / 10000000))   {*cp++ = j + '0'; i -= j*10000000;   goto x6;}
+     if ((j = i / 1000000))    {*cp++ = j + '0', i -= j*1000000;    goto x5;}
+ b5: if ((j = i / 100000))     {*cp++ = j + '0', i -= j*100000;     goto x4;}
+     if ((j = i / 10000))      {*cp++ = j + '0', i -= j*10000;      goto x3;}
+ b3: if ((j = i / 1000))       {*cp++ = j + '0', i -= j*1000;       goto x2;}
+     if ((j = i / 100))        {*cp++ = j + '0', i -= j*100;        goto x1;}
+ b1: if ((j = i / 10))         {*cp++ = j + '0', i -= j*10;         goto x0;}
+     if (i)                     *cp++ = i + '0';
+    return cp;
+
+ x8: *cp++ = i / 100000000 + '0', i %= 100000000;
+ x7: *cp++ = i / 10000000  + '0', i %= 10000000;
+ x6: *cp++ = i / 1000000   + '0', i %= 1000000;
+ x5: *cp++ = i / 100000    + '0', i %= 100000;
+ x4: *cp++ = i / 10000     + '0', i %= 10000;
+ x3: *cp++ = i / 1000      + '0', i %= 1000;
+ x2: *cp++ = i / 100       + '0', i %= 100;
+ x1: *cp++ = i / 10        + '0', i %= 10;
+ x0: *cp++ = i             + '0';
+
+    return cp;
+}
+
 /*
  * initialise the region table
  */
@@ -450,7 +502,7 @@ static void tileviz(Settings *s, int ntiles, RegionTable ***rts)
                             // mark bad regions with COLOUR_QC_FAIL in coverage image
                             if (summary_rt.state & REGION_STATE_BAD) colour = COLOUR_QC_FAIL;
                             gdImageSetPixel(im[IMAGE_COVERAGE],  x, y, colour_table[colour]);
-                            // for mismatch, insertion and deletion convert to a percentage and bin 0(<=0), 1(<=10%), 2(<=20), ...
+                            // for mismatch, insertion and deletion convert to a percentage and bin 0(<=0), 1(<=10), 2(<=20), ...
                             colour = (10.0 * summary_rt.deletion) / n + (summary_rt.deletion ? 1 : 0);
                             gdImageSetPixel(im[IMAGE_DELETION],  x, y, colour_table[colour]);
                             colour = (10.0 * summary_rt.insertion) / n + (summary_rt.insertion ? 1 : 0);
@@ -515,12 +567,12 @@ static void tileviz(Settings *s, int ntiles, RegionTable ***rts)
                     for (iy = 0; iy < s->nregions_y; iy++) {
                         if (s->regions[iregion] >= 0) {
                             RegionTable *rt = rts[itile*N_READS+read][cycle] + s->regions[iregion];
-                            int n = rt->align;
+                            int n = rt->align + rt->insertion + rt->deletion + rt->soft_clip + rt->known_snp;
                             if (n) {
                                 int x = (surf-1) * (s->nregions_x * num_cols + IMAGE_COLUMN_GAP) + (col-1) * s->nregions_x + ix;
                                 int y = IMAGE_LABEL_HEIGHT + (row-1) * (s->nregions_y + 1) + iy;
                                 int colour;
-                                // for mismatch, insertion and deletion convert to a percentage and bin 0(<=0), 1(<=10%), 2(<=20), ...
+                                // for mismatch, insertion and deletion convert to a percentage and bin 0(<=0), 1(<=10), 2(<=20), ...
                                 colour = (10.0 * rt->deletion) / n + (rt->deletion ? 1 : 0);
                                 gdImageSetPixel(im[IMAGE_DELETION],  x, y, colour_table[colour]);
                                 colour = (10.0 * rt->insertion) / n + (rt->insertion ? 1 : 0);
@@ -717,7 +769,7 @@ static void setRegionState(Settings *s, int ntiles, size_t nreads, RegionTable *
                     if (((float)rt->deletion  / (float)n) >= s->region_deletion_threshold)  rt->state |= REGION_STATE_DELETION;
                 }
                 if (NULL != state_rts) {
-                    /* set the state using the RT state */
+                    /* set the state of the regions using the state RT */
                     iregion = 0;
                     for (ix = 0; ix < s->nregions_x; ix++) {
                         int ix_state = ix / scale_factor;

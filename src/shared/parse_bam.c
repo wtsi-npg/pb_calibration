@@ -143,6 +143,7 @@ parse_bam_alignments(
     for (i = 0; i < bam->core.l_qseq; i++) {
         read_seq[i] = bam_nt16_rev_table[bam1_seqi(seq, i)];
         read_qual[i] = qual[i];
+        if (read_ref) read_ref[i] = 'N';
     }
     read_seq[i] = 0;
 	if (read_ref) read_ref[i] = 0;
