@@ -358,3 +358,7 @@ int long_sort(const void *i1, const void *i2) {
     return *(long *)i1 > *(long *)i2;
 }
 
+int float_sort(const void *i1, const void *i2) {
+    return *(float *)i1 > *(float *)i2;
+}
+

@@ -15,3 +15,4 @@ char *word2str(int word, int NH);
 int int_cmp(const void *t1, const void *t2);
 int int_sort(const void *t1, const void *t2);
 int long_sort(const void *t1, const void *t2);
+int float_sort(const void *t1, const void *t2);
