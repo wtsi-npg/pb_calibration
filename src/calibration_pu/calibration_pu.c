@@ -380,6 +380,9 @@ static void findBadTiles(Settings *s, int ntiles, SurvTable **sts)
     if (0 == filter || 0 >= ntiles)
         return;
     
+    float *quality;
+    quality = (float *)smalloc(ntiles *sizeof(float));
+
     for(read=0;read<N_READS;read++)
         for(cycle=0;cycle<s->read_length[read];cycle++)
         {
@@ -389,23 +392,33 @@ static void findBadTiles(Settings *s, int ntiles, SurvTable **sts)
             int nq = 0;
             float qavg, q2avg, qstd, qmin;
 
+            /* calculate a phred quality for each tile */
+            memset(quality, 0, ntiles * sizeof(float));
             for(itile=0;itile<ntiles;itile++) {
                 SurvTable *st = sts[itile*N_READS+read] + cycle;
-                qmax = (st->quality > qmax ? st->quality : qmax);
+                quality[itile] = st->quality;
             }
 
-            /* it could be that all tiles for this cycle are all N */
+            /* sort by quality and find the tile with the min error rate (highest quality) */
+            qsort(quality, ntiles, sizeof(float), float_sort);
+            qmax = quality[ntiles-1];
+            
+            /* skip this cycle if all bases are error, usually this means all bases are called as N */
             if( qmax < 0.0 )
                 continue;
 
-            /* flag tiles with q < qmax-20, i.e. error rate 100 * min error rate */
+            /* calc qmin = qmax-20, we will exclude tiles with an error rate > 100x the min error rate */
             qmin = max(qmax - 20.0, 0.0);
+
+            /* Warning - for tiles with multiple dropouts the aligner can truncate a large fraction of the reads at the same cycle, as 
+               the aligner will not usually allow a mismatch at the last aligned base this can artificially reduce the error rate.
+               Check the tile with the min error rate is not an outlier by ensuring we retain at least 75% of the tiles */
+            qmin = min(qmin, quality[(int)(0.25*ntiles)]);
 
             for(itile=0;itile<ntiles;itile++) {
                 SurvTable *st = sts[itile*N_READS+read] + cycle;
-                /* skip tiles which are not good */
-                if( st->status != ST_STATUS_GOOD )
-                    continue;
+                /* at this stage ALL the tiles should be good */
+                assert(st->status == ST_STATUS_GOOD );
                 if( st->quality < qmin ) {
                     st->status = ST_STATUS_BAD;
                 } else {
@@ -445,7 +458,8 @@ static void findBadTiles(Settings *s, int ntiles, SurvTable **sts)
             }
         }
 
-    return;
+        free(quality);
+        return;
 }
 
 static SurvTable **makeGlobalSurvTable(Settings *s, int ntiles, SurvTable **sts)
