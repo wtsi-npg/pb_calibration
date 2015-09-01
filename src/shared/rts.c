@@ -34,10 +34,24 @@ void readHeader(FILE *fp, Header *hdr)
     fgets(line, len, fp); hdr->coord_factor = atoi(line);
     fgets(line, len, fp); hdr->region_size = atoi(line);
     fgets(line, len, fp); hdr->ntiles = atoi(line);
-	hdr->tileArray = smalloc(hdr->ntiles * sizeof(int));
-	for (i=0; i < hdr->ntiles; i++) {
-		fgets(line, len, fp); hdr->tileArray[i] = atoi(line);
-	}
+    hdr->tileArray = NULL;
+    hdr->tileReadCountArray = NULL;
+    if (hdr->ntiles > 0) {
+        hdr->tileArray = smalloc(hdr->ntiles * sizeof(int));
+        hdr->tileReadCountArray = smalloc(hdr->ntiles * sizeof(size_t));
+        for (i=0; i < hdr->ntiles; i++) {
+            int n;
+            fgets(line, len, fp);
+            n = sscanf(line, "%d\t%lu\n", &hdr->tileArray[i], &hdr->tileReadCountArray[i]);
+            switch (n) {
+                case 1:	hdr->tileReadCountArray[i] = 0; break;
+                case 2:	break;
+                default: display("ERROR: Invalid filter file");
+                         exit(1);
+                         break;
+            }
+        }
+    }
     fgets(line, len, fp); hdr->nregions = atoi(line);
     fgets(line, len, fp); hdr->nregions_x = atoi(line);
     fgets(line, len, fp); hdr->nregions_y = atoi(line);
@@ -62,8 +76,8 @@ void writeHeader(FILE *fp, Header *hdr)
     fprintf(fp, "%d\n", hdr->coord_factor);
     fprintf(fp, "%d\n", hdr->region_size);
     fprintf(fp, "%d\n", hdr->ntiles);
-	for (i=0; i < hdr->ntiles; i++) {
-		fprintf(fp, "%d\n", hdr->tileArray[i]);
+    for (i=0; i < hdr->ntiles; i++) {
+      fprintf(fp, "%d\t%lu\n", hdr->tileArray[i], hdr->tileReadCountArray[i]);
 	}
     fprintf(fp, "%d\n", hdr->nregions);
     fprintf(fp, "%d\n", hdr->nregions_x);
