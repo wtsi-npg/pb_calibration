@@ -693,6 +693,8 @@ static int setScaleFactor(Settings *s, int ntiles, size_t nreads, RegionTable **
         region_count = (float)nreads / (float)(ntiles * nregions);
         display("State region: nregions_x=%d nregions_y=%d nregions=%d region_size=%d region_count=%d\n",
                 nregions_x, nregions_y, nregions, region_size, region_count);
+        // the region size cannot exceed the tile size
+        if (nregions == 1) break;
     }
 
 	return scale_factor;
