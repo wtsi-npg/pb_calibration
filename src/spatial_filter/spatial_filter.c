@@ -1211,8 +1211,6 @@ int filter_bam(Settings *s, samfile_t *fp_in_bam, samfile_t *fp_out_bam,
             if (0 > samread(fp_in_bam, bam)) {
                 break;	/* break on end of BAM file */
             }
-            if (0 > samwrite(fp_out_bam, bam)) die("Error: writing bam file\n");
-
         } else {
             /* apply filter */
 
