@@ -3,7 +3,10 @@
  *
 
   Last edited:
-  25 jan simpler confidences: conf25
+  19 Jan confidences
+  mix1   conf1  low freq allele mixture <25%
+  mix2   conf2  high freq allele mixture (25% , 50%)
+
 
   11 Jan 2016 : look at ploidy, get hard codes inside corresponding functions
   void get_bins_ploidy	(int bins_ploid[], int plo);// // how to consider first n25 depending on ploidy
@@ -19,12 +22,12 @@ AvActDepth=52 (avDP4)
 min_depthR=2
 min_depthA=2
 
-  30 May last 75 implemented
+  30 May last 75 bins implemented
 
 
  *-------------------------------------------------------------------
  * Description: computes AAF distrib over variant positions from vcf extracted 6 fields, stores histogram file 'distr',
-   computes possible percentage of contaminated mixture and its confidence
+   computes possible percentage of contaminated mixture (two modes) and its confidence
 
  * Exported functions:
  * HISTORY:
@@ -328,8 +331,8 @@ int main    (int argc, char *argcv[]) {
            printf("possible low percentage mixture= %d\n", mix25);
            //printf("possible complement low percentage mixture= %d\n", mixc25);
 
-           if (( mix25-100+mixc25)<dist)
-               conf25=conf25*1.1;
+           //if (( mix25-100+mixc25)<dist)
+            //   conf25=conf25*1.1;
 
            printf("confidence of low freq mixture = %.4f\n", conf25);
 
@@ -342,12 +345,18 @@ int main    (int argc, char *argcv[]) {
 	       //printf("skewness of last 25 mix25 AF = %.2f\n", sk75);
 	      // printf("likelihood of last 25 mix25 AF = %.2f\n", likely75);
 
-	   // MAIN output: mixFile
-	  if (fprintf(mixFile,"mix_percentage=%d\npossible_mix_percentage= %d\nhigh_freq_possible_mix_percentage= %d\nconfidence_nonzeroMix=%.2f\nAvActDepth=%d\nmin_depthR=%d\nmin_depthA=%d\nskew25=%.2f\nskew75=%.2f\n", mix25_update,mix25,mix25_50,conf,avDP4,thR,thA,sk25,sk75)<= 0 )
- 	  {
-	                canWriteMix = 0;
+	   // ======================MAIN output: mixFile
+	  //if (fprintf(mixFile,"mix_percentage=%d\npossible_mix_percentage= %d\nhigh_freq_possible_mix_percentage= %d\nconfidence_nonzeroMix=%.2f\nAvActDepth=%d\nmin_depthR=%d\nmin_depthA=%d\nskew25=%.2f\nskew75=%.2f\n", mix25_update,mix25,mix25_50,conf,avDP4,thR,thA,sk25,sk75)<= 0 )
+ 	  //{
+	  //             canWriteMix = 0;
 	                //return -1;
+      //}
+       if (fprintf(mixFile,"mix lowfreq=%d\nconfidence low freq= %.4f\nmix high freq= %d\nconfidence high freq=%.4f\nAvActDepth=%d\nmin_depthR=%d\nmin_depthA=%d\nskew25=%.2f\nskew75=%.2f\n", mix25,conf25,mix25_50,conf25_50,avDP4,thR,thA,sk25,sk75)<= 0 )
+	   	  {
+	  	                canWriteMix = 0;
+	  	                //return -1;
       }
+
     fclose(distribFile);
     fclose(extract_vcfFile);
     fclose(mixFile);
@@ -834,6 +843,9 @@ float Confidence25(float sk25,float sk75,int mix25,int mixc25, float thr25, floa
 
     float conf,lik1,likc1;
     float E1,EC1;
+    int peak_dist;
+
+    peak_dist=8;
 
     //--------------------
  printf("Mode1:\n ");
@@ -844,12 +856,16 @@ float Confidence25(float sk25,float sk75,int mix25,int mixc25, float thr25, floa
     printf("exist mix25 = %.2f\n", E1);
 
     EC1=0.0;
-    if (mixc25 >0 ) EC1=1.0;
+    if (abs(mixc25-mix25) < peak_dist )    // close enough
+    EC1=1.0;
+    //if (mixc25 >0 ) EC1=1.0;
     printf(" exist complem mix25 = %.2f\n", EC1);
 
     lik1=sk25*sk25;
     if (sk25 >= thr25)
     {lik1=sk25;}
+
+
     printf(" likely mix25 = %.2f\n", lik1);
 
     likc1=sk75*sk75;
@@ -859,6 +875,9 @@ float Confidence25(float sk25,float sk75,int mix25,int mixc25, float thr25, floa
 
       // larger any how!
           conf=(1-1/avDP4)*(E1+EC1)*0.5*lik1*likc1;
+
+          // if (abs(mixc25-mix25) < peak_dist )// close enough
+          //     conf=conf*1.1;
 
             if (conf>1)
             {conf=1.0;}
@@ -877,6 +896,9 @@ float Confidence25_50(float sk25,float sk75,int mix25_50,int mixc25_50, float th
 
     float conf,lik1,likc1;
     float E1,EC1;
+    int peak_dist;
+
+    peak_dist=8;
 
     //--------------------
  printf("Mode2:\n ");
@@ -887,7 +909,11 @@ float Confidence25_50(float sk25,float sk75,int mix25_50,int mixc25_50, float th
     printf("exist mix25_50 = %.2f\n", E1);
 
     EC1=0.0;
-    if (mixc25_50 >0 ) EC1=1.0;
+   // if (mixc25_50 >0 ) EC1=1.0;
+
+    if (abs(mixc25_50-mix25_50) < peak_dist )    // close enough
+	    EC1=1.0;
+
     printf(" exist complem mix25_50 = %.2f\n", EC1);
 
     lik1=sk25*sk25;
@@ -908,3 +934,23 @@ float Confidence25_50(float sk25,float sk75,int mix25_50,int mixc25_50, float th
 
      return conf;
 }
+//-------------------------
+int let2int(char letter)
+{
+
+	int result;
+
+	//initiate
+	result=0;
+
+	if (letter=='a' || letter=='A')
+	    result=1;
+	if (letter=='c' || letter=='C')
+	    result=2;
+	if (letter=='g' || letter=='G')
+	    result=3;
+	if (letter=='t' || letter=='T')
+	    result=4;
+
+	    return result;
+	}
