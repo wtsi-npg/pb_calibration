@@ -916,14 +916,14 @@ float Confidence25_50(float sk25,float sk75,int mix25_50,int mixc25_50, float th
 
     printf(" exist complem mix25_50 = %.2f\n", EC1);
 
-    lik1=sk25*sk25;
+    lik1=sk25*sk25;//assume sk25<1
     if (sk25 < thr25)// humph 25-20 is larger than humph25=sk25!
-    {lik1=1-sk25;}
+    {lik1=sk25;}
     printf(" likely mix25_50 = %.2f\n", lik1);
 
     likc1=sk75*sk75;
     if (sk75 < thr75)
-    {likc1=1-sk75;}
+    {likc1=sk75;}
    printf(" likely complem mix25_50 = %.2f\n", likc1);
 
       // larger any how!
