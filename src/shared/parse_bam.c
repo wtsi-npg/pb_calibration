@@ -143,6 +143,7 @@ parse_bam_alignments(
     for (i = 0; i < bam->core.l_qseq; i++) {
         read_seq[i] = bam_nt16_rev_table[bam1_seqi(seq, i)];
         read_qual[i] = qual[i];
+        if (read_ref) read_ref[i] = 'N';
     }
     read_seq[i] = 0;
 	if (read_ref) read_ref[i] = 0;
@@ -182,8 +183,11 @@ parse_bam_alignments(
 				if (read_ref) read_ref[j] = 'S';
 			}
             break;
+        case BAM_CREF_SKIP:
+            // CIGAR: skip on the reference (e.g. spliced alignment)
+            break;
         default:
-            die("ERROR: Unexpected CIGAR operation: %c\n", op);
+            die("ERROR: Unexpected CIGAR operation: %d\n", op);
         }
     }
     if (j != bam->core.l_qseq) {

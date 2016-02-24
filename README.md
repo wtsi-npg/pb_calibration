@@ -19,7 +19,7 @@ Calculate and apply purity (calculated form dif files), cycle, and (good/bad) ti
 #Building
 
     cd src
-    ./bootstrap
-    ./configure --prefix=$PWD/.. --with-samtools=/software/solexa/bin/aligners/samtools/current
+    autoreconf --force --install
+    ./configure --prefix=$PWD/.. --with-samtools=/software/solexa/pkg/samtools/current
     make install
 

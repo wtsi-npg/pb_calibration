@@ -26,6 +26,7 @@ typedef struct {
     int coord_factor;
     int ntiles;
     int *tileArray;
+    size_t *tileReadCountArray;
     int region_size;
     int nregions;
     int nregions_x;
