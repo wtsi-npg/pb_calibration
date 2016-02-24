@@ -66,7 +66,7 @@ usage:./get_mixture rams.thr extracted.vcf name.mix name.distrAF
 #include <math.h>
 #include <string.h>
 
-// ******** predefined user constants, 22 october
+// ******** predefined user constants,
 
 #define NRID 6      // Number of variant ids=fields: pos, chromosome, Depth,DP4,(no PV4+maf) in esigtracted_vcf files
 #define NPAR 5      // masig Number of PARameters and arguments
@@ -135,8 +135,6 @@ int main    (int argc, char *argcv[]) {
        int n25,n49;
        int n51,n75;
        // mode 2 : 30< mix < 45
-       int n2_25,n2_49;
-       int n2_51,n2_75;
        // skewness thresholds
        float thr25,thr75;
 
@@ -351,7 +349,7 @@ int main    (int argc, char *argcv[]) {
 	  //             canWriteMix = 0;
 	                //return -1;
       //}
-       if (fprintf(mixFile,"mix lowfreq=%d\nconfidence low freq= %.4f\nmix high freq= %d\nconfidence high freq=%.4f\nAvActDepth=%d\nmin_depthR=%d\nmin_depthA=%d\nskew25=%.2f\nskew75=%.2f\n", mix25,conf25,mix25_50,conf25_50,avDP4,thR,thA,sk25,sk75)<= 0 )
+       if (fprintf(mixFile,"mix low freq=%d\nconfidence low freq= %.4f\nmix high freq= %d\nconfidence high freq=%.4f\nAvActDepth=%d\nmin_depthR=%d\nmin_depthA=%d\nskew25=%.2f\nskew75=%.2f\n", mix25,conf25,mix25_50,conf25_50,avDP4,thR,thA,sk25,sk75)<= 0 )
 	   	  {
 	  	                canWriteMix = 0;
 	  	                //return -1;
@@ -555,7 +553,7 @@ float GetStd( int data[])
   	              break;}
        }
    }// if (peak[1]>0)-exist any peak <25%
-      printf("MOde1: percentage giving this max = %d\n", mix25);
+      printf("Mode1: percentage giving this max = %d\n", mix25);
        return mix25;
 
 }
@@ -630,7 +628,9 @@ float   GetSkew75( int data[],int n51, int n75)
 
 // make decision if mix25 noise or mixture: update it to zero if needed
 //if mix25 is more than n25 (here =25), it is likely to be diploid allele noise  :  17 Nov+ amount AF<25%  skewed (too high)
-//int MakeDecisionMix(int mix25, float sk25, float thr25)
+
+
+//int MakeDecisionMix(int mix25, float sk25, float thr25)---------------------to update mix
 int MakeDecisionMix(int mix25, float sk25, float thr25,float sk75,float thr75)// update percentage mix
 
 {
@@ -645,7 +645,6 @@ int MakeDecisionMix(int mix25, float sk25, float thr25,float sk75,float thr75)//
 
         return mix25_update;
 }
-
 
 
 //==========================================fill the thr bins for skewness
@@ -663,8 +662,6 @@ void get_bins_ploidy	(int bins_ploid[], int plo)//
 			             // n49=46;
 			             // n51=60;
 			             // n75=83;
-
-
 	  }
 
 	  if (plo<2){
@@ -679,8 +676,6 @@ void get_bins_ploidy	(int bins_ploid[], int plo)//
 	  			             // n49=50;
 	  			             // n51=51;
 	  			             // n75=79;
-
-
 	  }
 }
 //--------------------skewness dep on ploidy
@@ -916,7 +911,7 @@ float Confidence25_50(float sk25,float sk75,int mix25_50,int mixc25_50, float th
 
     printf(" exist complem mix25_50 = %.2f\n", EC1);
 
-    lik1=sk25*sk25;//assume sk25<1
+    lik1=sk25*sk25;
     if (sk25 < thr25)// humph 25-20 is larger than humph25=sk25!
     {lik1=sk25;}
     printf(" likely mix25_50 = %.2f\n", lik1);
