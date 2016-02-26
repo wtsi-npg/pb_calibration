@@ -3,7 +3,9 @@
  *
 
   Last edited:
-  19 Jan confidences
+  26 Feb smake likelihood a little bigger: sk=sk*0.9, instead of sk*sk
+
+  Jan confidences
   mix1   conf1  low freq allele mixture <25%
   mix2   conf2  high freq allele mixture (25% , 50%)
 
@@ -856,14 +858,14 @@ float Confidence25(float sk25,float sk75,int mix25,int mixc25, float thr25, floa
     //if (mixc25 >0 ) EC1=1.0;
     printf(" exist complem mix25 = %.2f\n", EC1);
 
-    lik1=sk25*sk25;
+    lik1=sk25*0.9;
     if (sk25 >= thr25)
     {lik1=sk25;}
 
 
     printf(" likely mix25 = %.2f\n", lik1);
 
-    likc1=sk75*sk75;
+    likc1=sk75*0.9;
     if (sk75 >= thr75)
     {likc1=sk75;}
    printf(" likely complem mix25 = %.2f\n", likc1);
@@ -911,12 +913,12 @@ float Confidence25_50(float sk25,float sk75,int mix25_50,int mixc25_50, float th
 
     printf(" exist complem mix25_50 = %.2f\n", EC1);
 
-    lik1=sk25*sk25;
+    lik1=sk25*0.9;
     if (sk25 < thr25)// humph 25-20 is larger than humph25=sk25!
     {lik1=sk25;}
     printf(" likely mix25_50 = %.2f\n", lik1);
 
-    likc1=sk75*sk75;
+    likc1=sk75*0.9;
     if (sk75 < thr75)
     {likc1=sk75;}
    printf(" likely complem mix25_50 = %.2f\n", likc1);
