@@ -3,6 +3,8 @@
  *
 
   Last edited:
+  13 April- added Steven's corrections and outputs
+  April - if empty vcfq file; if small data in histo thr_tot=200 variants
   14 March  - three modes and likelihoods: low, middle , high
 
 
@@ -24,9 +26,13 @@ input1 thrfile  (thRR thAA  mu  std  ploidy )
 input2: extracted vcf: pos, D , DP4 (DP4 is four fields)
 
 
-output1: mix_conf AF.txt=
-mixture confidence
-12        0.87
+output1: mix=
+mixture mode1 likelihood1
+12               0.87
+mixture mode2 likelihood2
+12               0.87
+mixture mode3 likelihood3
+12               0.87
 
 output2: .distrAF=histogram of AF with significance for each bin
 % count
@@ -36,12 +42,13 @@ output2: .distrAF=histogram of AF with significance for each bin
 11 780
 
 
-usage:./get_mixture rams.thr extracted.vcf name.mix name.distrAF
+usage:./get_mixture name.thr extracted.vcf name.mix name.distrAF
 
 */
 
 #include <stdio.h>
-//#include "conio.h"
+#include <errno.h>
+#include <stdlib.h>
 #include <time.h>
 #include <math.h>
 #include <string.h>
@@ -58,7 +65,8 @@ float   GetMu( int data[]);
 float   GetStd( int data[]);
 
 void skewnesses (int data[], float sk[], float skc[], int st[], int stc[]);
-void MixMode(int mix[], int st[], int data[], int d);
+void MixMode(int mix[], int st[], int data[], int dist);
+void MixModeComplement(int mixc[], int stc[], int data[], int dist);
 int GetMaxPeakInterval(int data[], int n1, int n2);//------max peak from the interval
 void Likely (float Lik[], float sk[],float skc[], int mixc[],float avDP4);
 
@@ -66,7 +74,7 @@ void Likely (float Lik[], float sk[],float skc[], int mixc[],float avDP4);
 
 int main    (int argc, char *argcv[]) {
 
-    // flags
+    // ---------------------flags
     int firstSixAreOK  = 1;
     int canWriteMix        = 1;
     int canWriteDistrib      = 1;
@@ -94,7 +102,7 @@ int main    (int argc, char *argcv[]) {
 
        // ----------------settings for skewnesses and their likelihoods: hardcoded within functions
 
-       int d;//distance , bin width for hist to compute skewness
+       int dist;//distance , bin width for hist to compute skewness
 
       //---------------results to compute:
        int count_afterF=0;// after filtering with min depths
@@ -102,169 +110,174 @@ int main    (int argc, char *argcv[]) {
 
        int AF;
 
-       //arrays
+       //---------------------------arrays
        int histAF[100];// to store mafs percentages
-       int peak[100];
-       int perc_peak[100];
        int st[4], stc [4];// starts of summing intervals for histo
        float sk[3],skc[3];// three skewnesses for mode0,1,2
   	   int mix[3],mixc[3]; //mixtures three modes and their complements
 	   float Lik[3];// likelihood or confidences three modes
 
-//-----------------------------------------open files for read/write
+	//-----------------------------------------open files for read/write
+
     if(argc < NPAR)//four input_output files are submitted
-    {
-        printf("not enough of parms |input_output files\n");
-        printf("usage:./get_mixture input1.thr input2.vcfq output1.mix output2.distr\n");
-        return -1;
+	{
+	        fprintf(stderr, "not enough of parms |input_output files\n");
+	        fprintf(stderr, "usage:./get_mixture input1.thr input2.vcfq output1.mix output2.distr\n");
+	        exit(EXIT_FAILURE);
     }
 
     thrFile=fopen(argcv[1],"r");
-		    if (thrFile == NULL) {
-		      printf("cannot open first input _threshold file %s\n", argcv[1]);
-		      return -1;
+			    if (thrFile == NULL) {
+			    fprintf(stderr, "cannot open first input _threshold file %s: %s\n", argcv[1], strerror(errno));
+			    exit(EXIT_FAILURE);
     }
 
+
     extract_vcfFile=fopen(argcv[2],"r");
-    if (extract_vcfFile == NULL) {
-      printf("cannot open first input _.vcfq file %s\n", argcv[2]);
-      return -1;
+	          if (extract_vcfFile == NULL) {
+	          fprintf(stderr, "cannot open first input _.vcfq file %s: %s\n", argcv[2], strerror(errno));
+	          exit(EXIT_FAILURE);
     }
 
     mixFile=fopen(argcv[3],"w");
-    if (mixFile == NULL) {
-    printf("cannot open first output1 mix_conf file %s for writing\n", argcv[3]);
-    return -1;
+	        if (mixFile == NULL) {
+	        fprintf(stderr, "cannot open first output mix_conf file %s for writing: %s\n", argcv[3], strerror(errno));
+	        exit(EXIT_FAILURE);
     }
 
     distribFile=fopen(argcv[4],"w");
-    if (distribFile == NULL) {
-    printf("cannot open second output file distAF %s for writing\n", argcv[4]);
-    return -1;
+            if (distribFile == NULL) {
+            fprintf(stderr, "cannot open second output distAF file %s for writing: %s\n", argcv[4], strerror(errno));
+            exit(EXIT_FAILURE);
     }
 
-    printf("get_mixture: parameters\n");
+
+         fprintf(stderr, "get_mixture: parameters\n");
+
 
     // ===SETTINGS     parameters for skewness measurements and peak consideretion: if Diploid then more noise around 50%
 
-    // initiate zero vector for histograme and its peaks
+             plo=0;// initial ploidy
+             dist=11;
+             avDP4 = 0;//initial average depth
+
+             // -----------initiate zero vector for histograme and its peaks
 			 for(i=0;i<100;i++)//
 	         {
 	              histAF[i]=0;
-	              peak[i]=0;
-	              perc_peak[i]=0;
-		     }
+	         }
 
-		     plo=0;// initial ploidy
-             d=11;
-		     //starts for skew
+		      //--------------starts for skews and complement skews bins
 			  for(i=0;i<4;i++)//
 			  {
 			       st[i]=0;
 			 	   stc[i]=0;
 			  }
-
-		     // initial skwnesses, mix, conf for modes 0,1,2
-             for(i=0;i<3;i++)//
-			 {
+		      // ------------initial skwnesses, mix, conf for modes 0,1,2
+              for(i=0;i<3;i++)//
+			  {
 			 	  sk[i]=0.0;
 			 	  skc[i]=0.0;
 			 	  mix[i]=0;
 			 	  mixc[i]=0;
 			 	  Lik[i]=0.0;
-		     }
-
-		// scan thr file	and assign current precomputed thresholds mu sd ploidy for filtering
-    while( (n = fscanf(thrFile,"%d %d %d %d %d", &thR, &thA,&muD, &stdD,&ploid)) >= 0)
-         // until the end of the input threshold  file
-    {
-		      if (n != Nthr) // incorrect format input
-		      {
-		      printf ("corrupted input thrFile format\n");
-		      return -1;
 		      }
 
+   //1. scan-read thr file	and assign current precomputed thresholds mu sd ploidy for filtering
+   while( (n = fscanf(thrFile,"%d %d %d %d %d", &thR, &thA,&muD, &stdD,&ploid)) >= 0)
+   {
+  		      if (n != Nthr) // incorrect format input thr file
+  		      {
+              fprintf (stderr, "corrupted input thrFile format\n");
+  		      exit(EXIT_FAILURE);
+  		      }
+
         plo=ploid;
-	}
-  printf("ploidy= %d\n", plo);
+   }
+        fprintf(stderr, "ploidy= %d\n", plo);
 
 
-// read main vcf file
-
-       //6 fields of input2 file	// no PV4: do it to compute AAF=AF
+   //2. scan-read main vcf file:6 fields of input2 file	// no PV4: do it to compute AAF=AF
 
     while( (n = fscanf(extract_vcfFile,"%d,%d,%d,%d,%d,%d", &pos, &D, &DP4[0], &DP4[1], &DP4[2], &DP4[3])) >= 0 && firstSixAreOK == 1 && canWriteMix == 1)
-
     {
-        if( n != NRID )     // incorrect format
-        {
-            firstSixAreOK = 0;
-            break;
-        }
-           count_beforeF++;
-           sumDbefore=sumDbefore+D;
+         if( n != NRID )     // incorrect format vcfq file
+		 {
+			  fprintf(stderr,"reading strange line= %d\n", n);
+			  continue;//skips this line if not end
+         }
+              count_beforeF++;
+              sumDbefore=sumDbefore+D;
 
-         // f1 Josie : filter for DP4 separately for ref and alternative alleles+ filter abnormal Depth
-
+         // filter for DP4 separately for ref and alternative alleles+ filter abnormal large Depth
            if ( DP4[0] >= thR && DP4[1]>= thR && DP4[2]>= thA && DP4[3]>= thA && D < (muD+2*stdD))// 0 ref alt are ok
            {
                 AF = GetAf(DP4);
                 histAF[AF-1]++;
 
-		        // for EACH POSITION, compute depths after thrRA filtering:
+		        // for EACH POSITION, compute depths after thrRA and stupid Depth filtering:
                        // average run depth after Q30, sum(DP4) across pos,=  sumDP4
-                        count_afterF++;
-				        sDP4=DP4[0]+DP4[1]+DP4[2]+DP4[3];
-				        sumDP4=sumDP4+sDP4;
-			}// end min_depth filter of DP4
+                 count_afterF++;
+				 sDP4=DP4[0]+DP4[1]+DP4[2]+DP4[3];
+				 sumDP4=sumDP4+sDP4;
+			}// end filters and AAF computing for one line DP4
 
-			// -------------output stupidly deep positions if (D >= (msD[0]+msD[1])) { fill the file
+			//? -------------output stupidly deep positions if (D >= (msD[0]+msD[1])) { fill the file
 
-       // removing space symbols before carriage return
+        // removing space symbols before carriage return
         do  {
             n = fgetc (extract_vcfFile);
         }
         while ((char)n != '\n');
 
-    } //END of outer while loop across vcfq file   AF is computed!
+   } //END of  while loop across vcfq file   AF is computed!
 
-    //====================== output2    write AF
-      for(i=0;i<101;i++)
-      {
-		  if( fprintf(distribFile,"%d %d\n",i, histAF[i]) <= 0 ) {
-          canWriteDistrib = 0;
-	      }
 
-       }//  for i=100 cycle
-//=======================================analysis of AF distribution to find mixture sample
+             fprintf(stderr,"count after filtering = %d\n",count_afterF);
 
-// stats after filtering :compute average depth :default and after filtering
+  if ( count_afterF >200 )// non empty, large enough after filtering vcfq
+  {
+  //=======================================analysis of AF distribution to find mixture sample
+
+         // stats after filtering :compute average depth :default and after filtering
 
           avDP4=ceil(sumDP4/count_afterF);//actual average cov  after Filt
 	      filtered_left=(100.0*count_afterF/count_beforeF);// percentage of filteerd out regions ( ? do we need?)
-          printf("percentage left after filtering = %.2f\n",filtered_left);
-          printf("coverage after filtering = %d\n",avDP4);
+          fprintf(stderr,"percentage left after filtering = %.2f\n",filtered_left);
+          fprintf(stderr,"coverage after filtering = %d\n",avDP4);
 
           //skewnesses (histAF, sk, skc);
           skewnesses (histAF, sk, skc, st,stc);
           for (i=0;i<3;i++)
-          printf("sk = %.2f\n",sk[i]);
+          fprintf(stderr,"sk = %.2f\n",sk[i]);
           for (i=0;i<3;i++)
-          printf("skc = %.2f\n",skc[i]);
+          fprintf(stderr,"skc = %.2f\n",skc[i]);
 
           // mixtures per mode; confidences per mixture
 
-           printf("Results:\n");
-           MixMode(mix, st, histAF,d);
-           MixMode(mixc, stc, histAF,d);
+           fprintf(stderr,"Results:\n");
+           MixMode(mix, st, histAF,dist);
+           MixModeComplement(mixc, stc, histAF,dist);
            Likely (Lik, sk,skc, mixc,avDP4);
 
-           //MAIN output  mix file
+	}// if not empty data
+
+//==========================================================OUTPUTS
+     //====================== output2    write AF
+		      for(i=0;i<101;i++)
+		      {
+		   		  if( fprintf(distribFile,"%d %d\n",i, histAF[i]) <= 0 ) {
+		             canWriteDistrib = 0;
+		   	      }
+
+              }//  for i=100 cycle
+
+           //=================MAIN output1  mix file
 
 	    if (fprintf(mixFile,"mix low freq=%d\nconfidence low freq= %.4f\nmix middle freq= %d\nconfidence middle freq=%.4f\nmix high freq= %d\nconfidence high freq=%.4f\nAvActDepth=%d\nmin_depthR=%d\nmin_depthA=%d\n", mix[0],Lik[0],mix[1],Lik[1],mix[2],Lik[2],avDP4,thR,thA)<= 0 )
            {
 	  	  	  	                canWriteMix = 0;
-	  	  	  	                //return -1;
+
            }
     fclose(distribFile);
     fclose(extract_vcfFile);
@@ -277,10 +290,10 @@ int main    (int argc, char *argcv[]) {
         printf ("\tcanWriteMix %d\n",        canWriteMix);
         printf ("\tcanWriteDistrib %d\n",      canWriteDistrib);
         printf ("Execution aborted\n");
-        return -1;
+        exit(EXIT_FAILURE);
     }
 
-    printf(" get mixture is performed.\n");
+    fprintf(stderr," get mixture is performed.\n");
     return 0;
 }//main
 
@@ -376,14 +389,14 @@ void skewnesses (int data[], float sk[], float skc[], int st[], int stc[])
       {
          n1=st[i];
          n2=stc[i];
-         s[i]=data[n1];
-         sc[i]=data[n2];
-         for (j=n1+1;j<n1+d;j++)
+         s[i]=0;
+         sc[i]=0;
+         for (j=n1;j<n1+d;j++)
          {
 	   		s[i]=s[i]+data[j];
 	   		 //printf(" sums=%.2f\n",s[i]);
 	   	 }
-	   	 for (j=n2+1;j<n2+d;j++)
+	   	 for (j=n2;j<n2+d;j++)
 		 {
 		 	sc[i]=sc[i]+data[j];
 	   	 }
@@ -404,7 +417,7 @@ void skewnesses (int data[], float sk[], float skc[], int st[], int stc[])
 
 //2============================================
 
-void MixMode(int mix[], int st[], int data[], int d)
+void MixMode(int mix[], int st[], int data[], int dist)
 
 {
 	 int i;
@@ -414,10 +427,29 @@ void MixMode(int mix[], int st[], int data[], int d)
 	 for (i=0;i< 3;i++)
 	 {
 		 n1=st[i];
-		 n2=n1+d;
+		 n2=n1+dist;
 	     m=GetMaxPeakInterval(data, n1, n2);//2.1 function
          mix[i]=m;
          printf(" mixes in modes=%d\n",mix[i]);
+	 }
+
+}
+//2.1.1============================================
+
+void MixModeComplement(int mixc[], int stc[], int data[], int dist)
+
+{
+	 int i;
+	 int n1,n2;
+	 int m;
+
+	 for (i=0;i< 3;i++)
+	 {
+		 n1=stc[i+1];
+		 n2=n1+dist;
+	     m=GetMaxPeakInterval(data, n1, n2);//2.1 function
+         mixc[i]=m;
+         printf(" mixes in modes=%d\n",mixc[i]);
 	 }
 
 }
@@ -508,7 +540,6 @@ void Likely (float Lik[], float sk[],float skc[], int mixc[],float avDP4)
 
 }
 }
-
 
 
 
