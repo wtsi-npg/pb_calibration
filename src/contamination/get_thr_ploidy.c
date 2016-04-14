@@ -158,7 +158,13 @@ int main    (int argc, char *argcv[]) {
 		   	         {
 		   	              histAF[i]=0;
 				     }
-
+       // initialise values
+                   thRR=0;
+                   thAA=0;
+                   avDP41=0;
+                   avDP4=0;
+                   stdDP4=0;
+                   ploid=1;
 
      //read main vcfq/a file: 6 fields of input file,CSV reading
      while (fgets(line, line_size, extract_vcfFile))
@@ -201,6 +207,20 @@ int main    (int argc, char *argcv[]) {
     } //END of outer while loop for all vcfq file, distrAF is computed
 
          fprintf(stderr,"count of good lines total before filter = %d\n", count_beforeF);
+         fprintf(stderr,"count of good lines total after filter = %d\n", count_afterF);
+
+     //====================== output2    write AF
+	    for(i=0;i<101;i++)
+	    {
+			  if( fprintf(distribFile,"%d %d\n",i, histAF[i]) <= 0 ) {
+	          canWriteDistrib = 0;
+		      }
+        }//  for i=100 cycle
+
+  // -----------------------if large enough vcfq file
+ if ( count_afterF >200 )// non empty, large enough after filtering vcfq
+ {
+
 
        // -----------  check ploidy detection
        ind=GetMax(histAF);// percent giving max peak in hist <80%
@@ -212,13 +232,7 @@ int main    (int argc, char *argcv[]) {
        ploid=ploidy(ind);// automated detection of ploidy: 1 or 2
        fprintf(stderr,"ploidy= %d\n", ploid);
 
-       //====================== output2    write AF
-      for(i=0;i<101;i++)
-      {
-		  if( fprintf(distribFile,"%d %d\n",i, histAF[i]) <= 0 ) {
-          canWriteDistrib = 0;
-	      }
-       }//  for i=100 cycle
+
 
      // compute stats: average depth : default and actual after 1,1 and q25 filtering
 
@@ -273,8 +287,10 @@ int main    (int argc, char *argcv[]) {
 					  thRR = 3;thAA=3;
 		  	         }
 
+	}// if large enough vcfq file
+
       //====================== output1   write thrs, avD, stdD and ploidy
-        fprintf(thrFile,"%d %d %d %d %d\n",thRR,thAA,avDP4,stdDP4,ploid);
+        fprintf(thrFile,"%d %d %d %d %d\n",thRR,thAA,avDP41,stdDP4,ploid);
 
     fclose(extract_vcfFile);
     fclose(thrFile);
