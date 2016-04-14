@@ -473,7 +473,7 @@ void MixModeComplement(int mixc[], int stc[], int data[], int dist)
      k=0;
      for (i=n1; i<n2; i++)
      {
-		 if ( ((data[i]-data[i-1]) >0 ) && ((data[i+1]-data[i]) < 0))// && ( max_peak < data[i]))//here peak in [i]
+		 if ( ((data[i]-data[i-1]) >=0 ) && ((data[i+1]-data[i]) < 0))// && ( max_peak < data[i]))//here peak in [i]
          {
 
              peak[k] = data[i];
