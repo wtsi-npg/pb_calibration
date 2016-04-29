@@ -27,7 +27,7 @@
 
 // ******** predefined user constants,
 #define NPAR 4                // Number of arguments
-#define NTHR 5                // Number of fields (thR, thA, mu, std and ploidy (1=haploid 2=diploid))
+#define NTHR 5                // Number of fields (thr_low, thr_up, mu, std and ploidy (1=haploid 2=diploid))
 #define NRID 6                // Number of fields (pos,Depth,DP4) in extracted_vcf files
 #define MIN_COUNT_AFTERF 200  // Minimum variant count after filtering
 #define DEFAULT_DIST 11       // Default bin width for hist to compute skewness
@@ -59,7 +59,7 @@ int main    (int argc, char *argv[]) {
 
     // values in threshold file
     int muD, stdD;
-    int thR, thA, ploid;
+    int thr_low, thr_up, ploid;
 
     // to read vcfa/vcfq
     static const int line_size = 8192; // maximum line size
@@ -86,13 +86,13 @@ int main    (int argc, char *argv[]) {
     int count_afterF; // variant count after filtering
 
     //---------------------------arrays
-    int histAF[100]; // to store mafs percentages
+    int histAF[101]; // to store mafs percentages
     int st[4], stc [4]; // starts of summing intervals for histo
     float sk[3], skc[3]; // three skewnesses for mode0,1,2
     int mix[3], mixc[3]; // mixtures three modes and their complements
     float Lik[3]; // likelihood or confidences three modes
 
-    static struct option long_options[] = 
+    static struct option long_options[] =
         { {"verbose", 0, 0, 'v'},
           {"help", 0, 0, 'h'},
           {0, 0, 0, 0}
@@ -145,13 +145,13 @@ int main    (int argc, char *argv[]) {
     fprintf(stderr, "get_mixture\n");
 
     // initialise AAF histogram
-    for (i=0;i<100;i++) {
+    for (i=0;i<101;i++) {
         histAF[i] = 0;
     }
 
     // read thr file - 5 fields theshold ref, threshold alt, mean depath, stddev depth and ploidy
     while (fgets(line, line_size, thrFile)) {
-        int k = sscanf(line, "%d %d %d %d %d", &thR, &thA, &muD, &stdD, &ploid);
+        int k = sscanf(line, "%d %d %d %d %d", &thr_low, &thr_up, &muD, &stdD, &ploid);
         if (k != NTHR) {
             // number of fields read not correct
             fprintf (stderr, "corrupt threshold file %s\n", line);
@@ -167,7 +167,7 @@ int main    (int argc, char *argv[]) {
     // initialise sums
     sumDP4 = 0;
 
-    // read vcfq file - 6 fields position, depth and 4xdepth (ref/forward, ref/reverse, alt/forward and alt/reverse) 
+    // read vcfq file - 6 fields position, depth and 4xdepth (ref/forward, ref/reverse, alt/forward and alt/reverse)
     while (fgets(line, line_size, extract_vcfFile)) {
         int k = sscanf(line, "%d,%d,%d,%d,%d,%d", &pos, &D, &DP4[0], &DP4[1], &DP4[2], &DP4[3]);
         if (k != NRID) {
@@ -178,7 +178,7 @@ int main    (int argc, char *argv[]) {
         count_beforeF++;
 
         // filter for DP4 separately for ref and alternative alleles and abnormaly large Depth
-        if( DP4[0] >= thR && DP4[1]>= thR && DP4[2]>= thA && DP4[3]>= thA && D < (muD+2*stdD) ) {
+        if( DP4[0] >= thr_low && DP4[1]>=thr_low && DP4[2]>= thr_low && DP4[3]>= thr_low && D < (thr_up) ) {
             int AF;
             float sDP4;
 
@@ -254,7 +254,7 @@ int main    (int argc, char *argv[]) {
             exit(EXIT_FAILURE);
         }
     }
-    
+
     // write mixture file
     if (fprintf(mixFile,"mix low freq=%d\nconfidence low freq=%.4f\n", mix[0], Lik[0]) <= 0 ) {
         fprintf(stderr, "error writing mixture_file: %s\n", strerror(errno));
@@ -268,7 +268,7 @@ int main    (int argc, char *argv[]) {
         fprintf(stderr, "error writing mixture_file: %s\n", strerror(errno));
         exit(EXIT_FAILURE);
     }
-    if (fprintf(mixFile,"AvActDepth=%d\nmin_depthR=%d\nmin_depthA=%d\n", avDP4, thR, thA) <= 0 ) {
+    if (fprintf(mixFile,"AvActDepth=%d\nmin_depth=%d\nmax_depth=%d\n", avDP4, thr_low, thr_up) <= 0 ) {
         fprintf(stderr, "error writing mixture_file: %s\n", strerror(errno));
         exit(EXIT_FAILURE);
     }
@@ -369,7 +369,7 @@ float GetStd( int data[])
 }
 
 ////////////////////////////////////////////////////
-// new skewnesses for three modes
+// skewnesses for three modes
 ////////////////////////////////////////////////////
 void skewnesses (int data[], float sk[], float skc[], int st[], int stc[])
 {
@@ -413,7 +413,7 @@ void skewnesses (int data[], float sk[], float skc[], int st[], int stc[])
 }
 
 ////////////////////////////////////////////////////
-// mixture mode
+// mixture in a mode
 ////////////////////////////////////////////////////
 void MixMode(int mix[], int st[], int data[], int dist)
 {
@@ -430,7 +430,7 @@ void MixMode(int mix[], int st[], int data[], int dist)
 }
 
 ////////////////////////////////////////////////////
-// mixture mode complement
+// mixture in the complementary modes, 100 - alfa
 ////////////////////////////////////////////////////
 void MixModeComplement(int mixc[], int stc[], int data[], int dist)
 {
@@ -502,6 +502,7 @@ int GetMaxPeakInterval(int data[], int n1, int n2)
 
 ////////////////////////////////////////////////////
 // confidences modes 0,1,2
+// we assume that the larger is skewness of a mode (pronounced humph), the more likely mixture belongs there
 ////////////////////////////////////////////////////
 void Likely (float Lik[], float sk[],float skc[], int mixc[],float avDP4)
 {
@@ -516,7 +517,9 @@ void Likely (float Lik[], float sk[],float skc[], int mixc[],float avDP4)
         l = sk[i];
         lc = skc[2-i];
         Lik[i] = (1-1/avDP4) * (l+lc+lp) / 3;
-    }
+      }
+    Lik[2]=(1-1/avDP4) * (l+lc*0.5+lp*0.5) / 3;// adjusted for majority of reads in this range
+;
 }
 
 
