@@ -1553,6 +1553,7 @@ SurvTable **makeSurvTable(Settings *s, samfile_t *fp_bam, int *bam_ntiles, size_
         if (BAM_FSECONDARY & bam->core.flag) continue;
         if (BAM_FSUPPLIMENTARY & bam->core.flag) continue;
         if (BAM_FPAIRED & bam->core.flag) {
+            if (BAM_FMUNMAP & bam->core.flag) continue;
             if (0 == (BAM_FPROPER_PAIR & bam->core.flag)) {
                 continue;
             }
