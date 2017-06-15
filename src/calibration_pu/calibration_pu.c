@@ -68,12 +68,19 @@
  * CHECK_BASECALL
  *   this option checks the base call corresponds to channel with
  *   the maximum intensity
+ *
+ * PPPRCN
+ *   we build an error profile based on a 4-base sequence context
+ *   previous, ref, called and next (PRCN) this option will enable
+ *   a 7-base context 4 previous, ref, called and next (PPPPRCN)
  */
 
 #define QC_FAIL
 #define PROPERLY_PAIRED
 //#define CALDATA
 //#define CHECK_BASECALL
+//#define PPPPRCN
+
 
 #ifdef HAVE_CONFIG_H
 #include "pb_config.h"
@@ -128,8 +135,13 @@
 
 #define LEN_SUBST       2
 #define NUM_SUBST       16    // 4 ^ LEN_SUBST
+#ifdef PPPPRCN
 #define LEN_CNTXT       7
 #define NUM_CNTXT       16384 // 4 ^ LEN_CNTXT
+#else
+#define LEN_CNTXT       4
+#define NUM_CNTXT       256   // 4 ^ LEN_CNTXT
+#endif
 
 #define ST_HILO_PURITY   0.63
 #define ST_HILO_QUALITY  29.5
@@ -685,7 +697,11 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
         /* read summary */
         SurvTable *st = read_sts[read];
         if( NULL == st) continue;
+#ifdef PPPPRCN
         int cntxt_off = 3;
+#else
+        int cntxt_off = 0;
+#endif
         int len_cntxt = 3;
         int num_cntxt = 64;
         long *count = (long *)smalloc(num_cntxt * sizeof(long));
@@ -723,7 +739,11 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
         /* read summary */
         SurvTable *st = read_sts[read];
         if( NULL == st) continue;
+#ifdef PPPPRCN
         int cntxt_off = 3;
+#else
+        int cntxt_off = 0;
+#endif
         int len_cntxt = 3;
         int num_cntxt = 64;
         long *count = (long *)smalloc(num_cntxt * sizeof(long));
@@ -763,7 +783,11 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
         /* read summary */
         SurvTable *st = read_sts[read];
         if( NULL == st) continue;
+#ifdef PPPPRCN
         int cntxt_off = 3;
+#else
+        int cntxt_off = 0;
+#endif
         int len_cntxt = 4;
         int num_cntxt = 256;
         long *count = (long *)smalloc(num_cntxt * sizeof(long));
@@ -801,7 +825,11 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
         /* read summary */
         SurvTable *st = read_sts[read];
         if( NULL == st ) continue;
+#ifdef PPPPRCN
         int cntxt_off = 3;
+#else
+        int cntxt_off = 0;
+#endif
         int len_cntxt = 4;
         int num_cntxt = 256;
         long *count = (long *)smalloc(num_cntxt * sizeof(long));
@@ -832,6 +860,7 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
         free(count);
     }
     
+#ifdef PPPPRCN
     /* previous 4 base homopolymer HRC. */
 
     fprintf(fp, "# Homopolymer effect high predictor. Use `grep ^HRCH | cut -f 2-` to extract this part\n");
@@ -979,6 +1008,7 @@ static void outputErrorTable(Settings *s, int ntiles, SurvTable **sts)
         fprintf(fp, "\n");
         free(count);
     }
+#endif
 
     freeSurvTable(s, 0, read_sts, 1);
     if( NULL != fp) fclose(fp);
@@ -1477,9 +1507,11 @@ static int updateSurvTable(Settings *s, SurvTable **sts, CifData *cif_data,
                 }
 
                 chr=0;
+#ifdef PPPPRCN
                 cntxt[chr++]=(b > 3 ? read_ref[b-4] : 'N');
                 cntxt[chr++]=(b > 2 ? read_ref[b-3] : 'N');
                 cntxt[chr++]=(b > 1 ? read_ref[b-2] : 'N');
+#endif
                 cntxt[chr++]=(b > 0 ? read_ref[b-1] : 'N');
                 cntxt[chr++]=read_ref[b];
                 cntxt[chr++]=read_seq[b];
