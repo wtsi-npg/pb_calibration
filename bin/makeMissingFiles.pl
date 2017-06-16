@@ -8,6 +8,7 @@ use warnings;
 use English qw(-no_match_vars);
 use Carp;
 use Getopt::Long;
+use File::Spec;
 use FileHandle;
 use POSIX qw(ceil);
 
@@ -27,17 +28,20 @@ sub usage {
   ## no critic
 
   print STDERR "\n";
-  print STDERR "makeMissingFiles.pl [-verbose] [-check] [-filter <filter>] [-cif <template>] [-bcl] [-noscl] <cif|dif|bcl|scl|stats>\n";
+  print STDERR "makeMissingFiles.pl [-verbose] [-check] [-filter <filter>] [-cif <template>] [-bcl] [-nocif] [-nodif] [-noscl] <cif|dif|bcl|scl|stats>\n";
   print STDERR "\n";
   print STDERR "        -check           just report missing files\n";
   print STDERR "\n";
   print STDERR "        -olb             only check for the files required for OLB i.e. cif files\n";
+  print STDERR "        -hiseqx          only check for the files created on a hiseqx i.e. bcl.gz but not cif, dif or stats\n";
+  print STDERR "\n";
   print STDERR "        -cif <template>  if cif file is missing make one based on this template\n";
   print STDERR "\n";
   print STDERR "        -filter <filter> if filter file does not exist make this one\n";
   print STDERR "        -bcl             if bcl file is missing make one\n";
   print STDERR "\n";
   print STDERR "        -nocif           do not check for missing cif files\n";
+  print STDERR "        -nodif           do not check for missing dif files\n";
   print STDERR "        -noscl           do not check for missing scl files\n";
   print STDERR "\n";
 
@@ -47,19 +51,19 @@ sub usage {
 sub process {
 
   my $file = $ARGV[0];
-  die "Invalid file $file\n" unless my ($intensities) = ($file =~ /^(.+\/Data\/Intensities).+$/);
+  $file = File::Spec->rel2abs($file);
 
-  my ($lane, $cycle, $tile);
+  my ($intensities, $lane, $cycle, $tile);
   if( $file =~ m/\.cif$/ ){
-    die "Invalid cif file $file\n" unless ($lane, $cycle, $tile) = ($file =~ m/\/L00(\d)\/(C\d+\.1)\/s_\1_(\d+)\.cif$/);
+    die "Invalid cif file $file\n" unless ($intensities, $lane, $cycle, $tile) = ($file =~ m/^(.+)\/L00(\d)\/(C\d+\.1)\/s_\2_(\d+)\.cif$/);
   } elsif( $file =~ m/\.dif$/ ){
-    die "Invalid dif file $file\n" unless ($lane, $cycle, $tile) = ($file =~ m/\/L00(\d)\/(C\d+\.1)\/s_\1_(\d+)\.dif$/);
-  } elsif( $file =~ m/\.bcl$/ ){
-    die "Invalid bcl file $file\n" unless ($lane, $cycle, $tile) = ($file =~ m/BaseCalls\/L00(\d)\/(C\d+\.1)\/s_\1_(\d+)\.bcl$/);
+    die "Invalid dif file $file\n" unless ($intensities, $lane, $cycle, $tile) = ($file =~ m/^(.+)\/L00(\d)\/(C\d+\.1)\/s_\2_(\d+)\.dif$/);
+  } elsif( $file =~ m/\.bcl(.gz)?$/ ){
+    die "Invalid bcl file $file\n" unless ($intensities, $lane, $cycle, $tile) = ($file =~ m/^(.+)\/BaseCalls\/L00(\d)\/(C\d+\.1)\/s_\2_(\d+)\.bcl(.gz)?$/);
   } elsif( $file =~ m/\.scl$/ ){
-    die "Invalid scl file $file\n" unless ($lane, $cycle, $tile) = ($file =~ m/BaseCalls\/L00(\d)\/(C\d+\.1)\/s_\1_(\d+)\.scl$/);
+    die "Invalid scl file $file\n" unless ($intensities, $lane, $cycle, $tile) = ($file =~ m/^(.+)\/BaseCalls\/L00(\d)\/(C\d+\.1)\/s_\2_(\d+)\.scl$/);
   } elsif( $file =~ m/\.stats$/ ){
-    die "Invalid stats file $file\n" unless ($lane, $cycle, $tile) = ($file =~ m/BaseCalls\/L00(\d)\/(C\d+\.1)\/s_\1_(\d+)\.stats$/);
+    die "Invalid stats file $file\n" unless ($intensities, $lane, $cycle, $tile) = ($file =~ m/^(.+)\/BaseCalls\/L00(\d)\/(C\d+\.1)\/s_\2_(\d+)\.stats$/);
   }else{
     print {*STDERR} "\nUnexpected file $file\n" or croak 'print failed';
     usage;
@@ -81,18 +85,24 @@ sub process {
 
   $/ = undef;
 
-  # a cif file must exist unless the -nocif or the -cif option was specified
-  if (exists($opts->{'nocif'}) || exists($opts->{'cif'})) {
-    warn "Missing cif file $cif\n" unless ( $opts->{'nocif'} || -e $cif );
-  }else{
-    die "Missing cif file $cif\n" unless -e $cif;
+  # a cif file must exist unless the -nocif or the -cif or the hiseqx option was specified
+
+  unless (exists($opts->{'nocif'}) || exists($opts->{'cif'}) || exists($opts->{'hiseqx'})) {
+    if (exists($opts->{'check'})) {
+      warn "Missing cif file $cif\n" unless -e $cif;
+    }else{
+      die "Missing cif file $cif\n" unless -e $cif;
+    }
   }
 
   if (exists($opts->{'olb'})) {
     exit if (exists($opts->{'check'}));
   }else{
+    # hiseqx bcl files are gzipped
+    $bcl .= ".gz" if exists($opts->{'hiseqx'});
+
     # a bcl file must exist unless the -bcl option was specified
-    if (exists($opts->{'bcl'})) {
+    if (exists($opts->{'check'}) || exists($opts->{'bcl'})) {
       warn "Missing bcl file $bcl\n" unless -e $bcl;
     }else{
       die "Missing bcl file $bcl\n" unless -e $bcl;
@@ -102,20 +112,20 @@ sub process {
     if (exists($opts->{'filter'})) {
       warn "Missing filter file $filter\n" unless -e $filter;
     }else{
-      # does an old filter file exist ? When ALL GAIIs and HiSeqs have been upgraded
-      # we can drop this check
-      unless ( -e $filter ){
-        my $old_filter = "$intensities/BaseCalls/s_${lane}_${ptile}.filter";
-        $filter = $old_filter if -e $old_filter;
-      }
       die "Missing filter file $filter\n" unless -e $filter;
     }
 
-    print "Missing dif file $dif\n" unless -e $dif;
-    print "Missing scl file $scl\n" unless ( $opts->{'noscl'} || -e $scl );
-    print "Missing stats file $stats\n" unless -e $stats;
+    # hiseqx we don't expect any other files
+    unless (exists($opts->{'hiseqx'})) {
+      print "Missing dif file $dif\n" unless ( $opts->{'nodif'} || -e $dif );
+      print "Missing scl file $scl\n" unless ( $opts->{'noscl'} || -e $scl );
+      print "Missing stats file $stats\n" unless -e $stats;
+    }
+
     exit if (exists($opts->{'check'}));
   }
+
+  exit if (exists($opts->{'hiseqx'}));
 
   unless ( $opts->{'nocif'} || -e $cif ){
     print "Writing zero intensity cif file $cif\n";
@@ -145,6 +155,12 @@ sub process {
     my %format = ("1" => "c*", "2" => "s*", "4" => "l*");
     $data .= pack($format{$dataType}, @data);
 
+    # pad intensity file to a multiple of 4096
+    my $s = length($data);
+    $s = 4096 * (int($s / 4096) + 1) if $s % 4096;
+    my $p = $s - length($data);
+    $data .= pack($format{1}, (0) x $p) if $p > 0;
+
     $fh->open(">$cif") or croak "$cif:\n$ERRNO";
     $fh->write($data);
     $fh->close();
@@ -152,13 +168,10 @@ sub process {
 
   exit if (exists($opts->{'olb'}));
 
-  # if a filter file exists read it otherwise exists make one
+  # if a filter file exists read it otherwise make one
   if ( -e $filter ){
     print "Reading filter file $filter\n";
   }else{
-    # When ALL GAIIs and HiSeqs have been upgraded we can remove the arg from the
-    # -filter option and modify makeFilterFile() to only suport new filter files
-    $filter = $opts->{'filter'} if (exists($opts->{'filter'}));
     makeFilterFile($filter);
   }
 
@@ -207,19 +220,63 @@ sub process {
       map{ push(@bases, $_ & 3); push(@quals, $_ >> 2) } @data;
     }
   }else{
-    print "Writing zero bcl file $bcl\n";
+    if( $opts->{'rebasecall'} && -e $dif ) {
+      print "Re-basecalling intensity file $dif\n";
+      print "All qualities set to 2 except for bases called as N which must have a quality of 0\n";
 
-    $nclusters = $nclusters_filtered;
-    $data = pack("l", $nclusters);
-    my @data = (0) x $nclusters;
-    $data .= pack("C*", @data);
+      $fh->open("<$dif") or croak "$dif:\n$ERRNO";
+      $data = <$fh>;
+      $fh->close();
+
+      my (@header) = unpack("C13", $data);
+      my $magic = substr($data,0,4);
+      my $dataType = $header[4];
+      my $firstCycle = $header[5] | $header[6] << 8;
+      my $num_cycles = $header[7] | $header[8] << 8;
+      my $num_entries = $header[9] | $header[10] << 8 | $header[11] << 16 | $header[12] << 24;
+      $data = substr($data,13);
+      my %format = ("1" => "c*", "2" => "s*", "4" => "l*");
+      my (@dif_data) = unpack($format{$dataType}, $data);
+
+      unless ($num_entries == $nclusters_filtered) {
+        die "Inconsistent dif and filter files nclusters = $num_entries expected $nclusters_filtered\n";
+      }
+
+      $nclusters = $nclusters_filtered;
+      $data = pack("l", $nclusters);
+      my @bcl_data = ();
+      for (my $cluster=0; $cluster<$nclusters; $cluster++) {
+        my ($max, $base) = (-99999, 0);
+        for (my $channel=0; $channel<4; $channel++) {
+          if( $dif_data[$num_entries * $channel + $cluster] > $max ) {
+             $max = $dif_data[$num_entries * $channel + $cluster];
+             $base = $channel;
+          }
+        }
+        # where we have a basecall set the quality to 2 (B)
+        my $qual = ($max ? 2 : 0);
+        push(@bases, $base);
+        push(@quals, $qual);
+        push(@bcl_data, $base | ($qual << 2));
+      }
+      $data .= pack("C*", @bcl_data);
+    }else{
+      print "Writing zero bcl file $bcl\n";
+
+      $nclusters = $nclusters_filtered;
+      $data = pack("l", $nclusters);
+      @bases = (0) x $nclusters;
+      @quals = (0) x $nclusters;
+      my @data = (0) x $nclusters;
+      $data .= pack("C*", @data);
+    }
 
     $fh->open(">$bcl") or croak "$bcl:\n$ERRNO";
     $fh->write($data);
     $fh->close();
   }
 
-  unless ( -e $dif ){
+  unless ( $opts->{'nodif'} || -e $dif ){
     print "Writing zero intensity dif file $dif\n";
 
     # check the bcl file contains ALL N's <=> qualities ALL 0
@@ -251,6 +308,12 @@ sub process {
     my @data = (0) x (4 * $num_entries);
     my %format = ("1" => "c*", "2" => "s*", "4" => "l*");
     $data .= pack($format{$dataType}, @data);
+
+    # pad intensity file to a multiple of 4096
+    my $s = length($data);
+    $s = 4096 * (int($s / 4096) + 1) if $s % 4096;
+    my $p = $s - length($data);
+    $data .= pack($format{1}, (0) x $p) if $p > 0;
 
     $fh->open(">$dif") or croak "$dif:\n$ERRNO";
     $fh->write($data);
@@ -387,7 +450,7 @@ sub process {
 sub initialise {
 
   my %opts;
-  my $rc = GetOptions(\%opts, 'verbose', 'check', 'olb', 'cif=s', 'filter=s', 'bcl', 'nocif', 'noscl', 'help');
+  my $rc = GetOptions(\%opts, 'verbose', 'check', 'olb', 'hiseqx', 'rebasecall', 'cif=s', 'filter=s', 'bcl', 'nocif', 'nodif', 'noscl', 'help');
   if ( ! $rc) {
     print {*STDERR} "\nerror in command line parameters\n" or croak 'print failed';
     usage;
